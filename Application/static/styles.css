@@ -1,0 +1,37 @@
+body {
+  font-family: system-ui, sans-serif;
+  padding: 1rem;
+  background: #f4f4f4;
+  color: #222;
+}
+
+h1 {
+  margin-bottom: 1rem;
+}
+
+.controls {
+  margin-bottom: 1rem;
+}
+
+button {
+  margin-right: 0.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+pre#output {
+  position: fixed;
+  top: 10rem;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 1rem;
+  background: #111;
+  color: #0f0;
+  font-family: monospace;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
