@@ -33,7 +33,6 @@ class Application {
     this.connected = false;
     this.prompt = null;
     this.online = navigator.onLine;
-    this.elements = null;
     this.db = new Database();
     this.init();
   }
@@ -176,7 +175,7 @@ class Application {
     } else {
       this.storeOfflineAction(data);
       this.logger.log('Stored for offline sync:', data);
-      this.showNotification('Message stored for offline sync', 'info');
+      this.showNotification('Message stored for offline sync');
     }
   }
 

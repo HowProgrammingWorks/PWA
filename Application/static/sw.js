@@ -133,7 +133,6 @@ self.addEventListener('activate', (event) => {
 const handleFetch = async (request) => {
   const response = await caches.match(request);
   if (response) return response;
-  
   const fetchRequest = request.clone();
   try {
     const fetchResponse = await fetch(fetchRequest);
@@ -144,7 +143,6 @@ const handleFetch = async (request) => {
     ) {
       return fetchResponse;
     }
-    
     const responseToCache = fetchResponse.clone();
     const cache = await caches.open(DYNAMIC_CACHE);
     cache.put(request, responseToCache);
