@@ -73,7 +73,7 @@ const server = http.createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ server });
 
-const broadcast = (data, excludeClientId = null) => {
+const broadcast = (data, excludeClientId = '') => {
   const message = JSON.stringify(data);
   for (const [clientId, connection] of connections) {
     if (clientId !== excludeClientId && connection.ws.readyState === 1) {
@@ -85,12 +85,6 @@ const broadcast = (data, excludeClientId = null) => {
       }
     }
   }
-};
-
-const broadcastMessage = (messageData, excludeClientId = null) => {
-  const { content, clientId, timestamp } = messageData;
-  const data = { type: 'broadcast', content, sender: clientId, timestamp };
-  broadcast(data, excludeClientId);
 };
 
 wss.on('connection', (ws, req) => {
@@ -115,11 +109,9 @@ wss.on('connection', (ws, req) => {
     const { type, content } = message;
     if (type === 'message') {
       const timestamp = new Date().toISOString();
-      const id = randomUUID();
-      const messageData = { id, type, content, clientId, timestamp };
-      messages.push(messageData);
+      messages.push({ type, content, clientId, timestamp });
       if (messages.length > MAX_MESSAGES) messages.shift();
-      broadcastMessage(messageData, clientId);
+      broadcast(message, clientId);
     } else if (message.type === 'ping') {
       ws.send(JSON.stringify({ type: 'pong' }));
     }
@@ -128,16 +120,16 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     console.log(`WebSocket connection closed: ${clientId}`);
     connections.delete(clientId);
-    broadcast({ type: 'userCount', count: connections.size });
-    console.log(
-      `Client disconnected: ${clientId} (Total: ${connections.size})`,
-    );
+    const count = connections.size;
+    broadcast({ type: 'userCount', count }, clientId);
+    console.log(`Client disconnected: ${clientId} (Total: ${count})`);
   });
 
   ws.on('error', (error) => {
     console.error(`WebSocket error for ${clientId}:`, error);
     connections.delete(clientId);
-    broadcast({ type: 'userCount', count: connections.size });
+    const count = connections.size;
+    broadcast({ type: 'userCount', count }, clientId);
   });
 });
 

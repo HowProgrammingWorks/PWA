@@ -1,5 +1,3 @@
-import { Database } from './database.js';
-
 class Logger {
   #output;
 
@@ -27,20 +25,19 @@ class Logger {
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 class Application {
-  constructor() {
+  constructor(worker) {
     this.logger = new Logger('output');
-    this.websocket = null;
-    this.connected = false;
     this.prompt = null;
     this.online = navigator.onLine;
-    this.db = new Database();
+    this.worker = worker;
     this.init();
   }
 
   init() {
+    this.worker.postMessage({ type: 'connect' });
     this.getElements();
     this.setupEventListeners();
-    this.setupNetworkListeners();
+    this.setupNetworkStatus();
     this.setupInstallPrompt();
     this.updateUI();
     setTimeout(() => {
@@ -51,12 +48,13 @@ class Application {
       this.clientId = generateId();
       localStorage.setItem('clientId', this.clientId);
     }
+    const ping = () => this.worker.postMessage({ type: 'ping' });
+    setInterval(ping, 25000);
+    document.addEventListener('visibilitychange', ping);
   }
 
   getElements() {
     this.installBtn = document.getElementById('install-btn');
-    this.connectBtn = document.getElementById('connect-btn');
-    this.disconnectBtn = document.getElementById('disconnect-btn');
     this.sendMessageBtn = document.getElementById('send-message-btn');
     this.clearBtn = document.getElementById('clear-btn');
     this.sendBtn = document.getElementById('send-btn');
@@ -68,32 +66,31 @@ class Application {
 
   setupEventListeners() {
     this.installBtn.onclick = () => this.install();
-    this.connectBtn.onclick = () => this.connect();
-    this.disconnectBtn.onclick = () => this.disconnect();
     this.sendMessageBtn.onclick = () => this.sendMessage();
     this.clearBtn.onclick = () => this.logger.clear();
     this.sendBtn.onclick = () => this.sendMessage();
     this.messageInput.addEventListener('keypress', (event) => {
       if (event.key === 'Enter') this.sendMessage();
     });
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      this.logger.log('Service Worker updated, reloading...');
-      window.location.reload();
-    });
     navigator.serviceWorker.addEventListener('message', (event) => {
-      this.logger.log('SW Message:', event.data);
+      this.logger.log('Message:', event.data);
+      this.onWorkerMessage(event.data);
+    });
+    window.addEventListener('beforeunload', () => {
+      this.worker.postMessage({ type: 'disconnect' });
     });
   }
 
-  setupNetworkListeners() {
+  setupNetworkStatus() {
     window.addEventListener('online', () => {
       this.online = true;
+      this.worker.postMessage({ type: 'online' });
       this.updateConnectionStatus();
       this.logger.log('Network: Online');
-      this.syncOfflineActions();
     });
     window.addEventListener('offline', () => {
       this.online = false;
+      this.worker.postMessage({ type: 'offline' });
       this.updateConnectionStatus();
       this.logger.log('Network: Offline');
     });
@@ -113,81 +110,36 @@ class Application {
     });
   }
 
-  async connect() {
-    if (this.connected) {
-      this.logger.log('Already connected');
-      return;
+  onWorkerMessage(message) {
+    if (message.type === 'status') {
+      this.updateUI();
+      if (message.connected) {
+        this.logger.log('Service worker connected');
+        this.showNotification('Service worker connected', 'success');
+      } else {
+        this.logger.log('Service worker disconnected');
+        this.showNotification('Service worker disconnected', 'warning');
+      }
     }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${window.location.host}`;
-    this.websocket = new WebSocket(url);
-
-    this.websocket.onopen = () => {
-      this.connected = true;
-      this.updateUI();
-      this.logger.log('WebSocket connected');
-      this.showNotification('WebSocket connected!', 'success');
-    };
-
-    this.websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      this.logger.log('Received:', data);
-      this.handleWebSocketMessage(data);
-    };
-
-    this.websocket.onclose = () => {
-      this.connected = false;
-      this.updateUI();
-      this.logger.log('WebSocket disconnected');
-      this.showNotification('WebSocket disconnected', 'warning');
-    };
-
-    this.websocket.onerror = (error) => {
-      this.logger.log('WebSocket error:', error);
-      this.showNotification('WebSocket connection failed', 'error');
-    };
-  }
-
-  disconnect() {
-    if (!this.websocket) return;
-    this.websocket.close();
-    this.websocket = null;
+    if (message.type === 'message') {
+      this.showNotification(`Message: ${message.content}`, 'info');
+      this.logger.log('Message:', message.content);
+    }
+    if (message.type === 'error') {
+      this.logger.log('Service worker error:', message.error);
+      this.showNotification('Service worker error', 'error');
+    }
   }
 
   async sendMessage() {
     const content = this.messageInput?.value?.trim();
     this.messageInput.value = '';
-
     if (!content) {
       this.showNotification('Please enter a message', 'warning');
       return;
     }
-
-    const timestamp = new Date().toISOString();
-    const clientId = this.clientId;
-    const id = generateId();
-    const data = { id, type: 'message', content, timestamp, clientId };
-
-    if (this.connected) {
-      this.websocket.send(JSON.stringify(data));
-      this.logger.log('Sent via WebSocket:', data);
-    } else {
-      this.storeOfflineAction(data);
-      this.logger.log('Stored for offline sync:', data);
-      this.showNotification('Message stored for offline sync');
-    }
-  }
-
-  handleWebSocketMessage(msg) {
-    if (msg.type === 'broadcast') {
-      this.logger.log('Broadcast:', msg.content);
-      this.showNotification(`Broadcast: ${msg.content}`);
-    } else if (msg.type === 'userCount') {
-      this.logger.log(`Active users: ${msg.count}`);
-    } else if (msg.type === 'system') {
-      this.logger.log('System:', msg.content);
-    }
+    this.worker.postMessage({ type: 'message', content });
+    this.logger.log('Sent message:', content);
   }
 
   async install() {
@@ -220,9 +172,7 @@ class Application {
   }
 
   updateUI() {
-    this.connectBtn.classList.toggle('hidden', this.connected);
-    this.disconnectBtn.classList.toggle('hidden', !this.connected);
-    this.sendMessageBtn.disabled = !this.connected && !this.online;
+    this.sendMessageBtn.disabled = !this.online;
     this.updateConnectionStatus();
   }
 
@@ -234,26 +184,6 @@ class Application {
     setTimeout(() => {
       this.notification.classList.add('hidden');
     }, 3000);
-  }
-
-  async storeOfflineAction(data) {
-    const timestamp = new Date().toISOString();
-    navigator.serviceWorker.controller.postMessage({
-      id: generateId(),
-      type: 'STORE_OFFLINE_ACTION',
-      data: { type: 'message', data, timestamp },
-    });
-    this.logger.log('Stored offline action:', data);
-  }
-
-  async syncOfflineActions() {
-    try {
-      const registration = await navigator.serviceWorker.ready;
-      await registration.sync.register('background-sync');
-      this.logger.log('Background sync registered');
-    } catch (error) {
-      this.logger.log('Background sync failed:', error.message);
-    }
   }
 
   async requestNotificationPermission() {
@@ -277,4 +207,9 @@ class Application {
 }
 
 window.Application = Application;
-window.application = new Application();
+
+navigator.serviceWorker.register('./worker.js');
+
+navigator.serviceWorker.ready.then((registration) => {
+  window.application = new Application(registration.active);
+});

@@ -23,43 +23,23 @@
         <div id="install-status" class="status-indicator hidden">Install Available</div>
       </div>
     </header>
-
     <main class="app-main">
       <div class="controls">
         <button id="install-btn" class="btn primary hidden">Install App</button>
-        <button id="connect-btn" class="btn">Connect WebSocket</button>
-        <button id="disconnect-btn" class="btn secondary hidden">Disconnect</button>
         <button id="send-message-btn" class="btn">Send Message</button>
         <button id="clear-btn" class="btn secondary">Clear Log</button>
       </div>
-
       <div class="message-input">
         <input type="text" id="message-input" placeholder="Enter your message..." />
         <button id="send-btn" class="btn primary">Send</button>
       </div>
-
       <div class="output-container">
         <h3>Activity Log</h3>
         <pre id="output"></pre>
       </div>
     </main>
-
     <div id="notification" class="notification hidden"></div>
   </div>
-
   <script type="module" src="./application.js"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js')
-          .then(registration => {
-            console.log('SW registered: ', registration);
-          })
-          .catch(registrationError => {
-            console.log('SW registration failed: ', registrationError);
-          });
-      });
-    }
-  </script>
 </body>
 </html>
