@@ -36,12 +36,16 @@ const handleApiRequest = async (request) => {
   );
 };
 
-const storeOfflineAction = async (action) => {
+const storeOfflineAction = async (message) => {
+  if (!message || !message.id) {
+    console.error('Invalid message data:', message);
+    return;
+  }
   const cache = await caches.open(DYNAMIC_CACHE);
-  const response = new Response(JSON.stringify(action), {
+  const response = new Response(JSON.stringify(message), {
     headers: { 'Content-Type': 'application/json' },
   });
-  await cache.put(`/offline-actions/${action.id}`, response);
+  await cache.put(`/offline-actions/${message.id}`, response);
 };
 
 const getOfflineActions = async () => {
@@ -61,16 +65,16 @@ const getOfflineActions = async () => {
   return actions;
 };
 
-const removeOfflineAction = async (actionId) => {
+const removeOfflineAction = async (id) => {
   const cache = await caches.open(DYNAMIC_CACHE);
-  await cache.delete(`/offline-actions/${actionId}`);
+  await cache.delete(`/offline-actions/${id}`);
 };
 
-const processOfflineAction = async (action) => {
-  if (action.type === 'message') {
-    console.log('Offline message stored:', action.data);
+const processOfflineAction = async (data) => {
+  if (data.type === 'message') {
+    console.log('Offline message stored:', data);
   } else {
-    console.log('Unknown action type:', action.type);
+    console.log('Unknown action type:', data.type);
   }
 };
 
@@ -90,38 +94,68 @@ const doBackgroundSync = async () => {
   }
 };
 
+const installServiceWorker = async () => {
+  try {
+    const cache = await caches.open(STATIC_CACHE);
+    console.log('Service Worker: Caching static assets');
+    await cache.addAll(STATIC_ASSETS);
+    console.log('Service Worker: Static assets cached');
+    return self.skipWaiting();
+  } catch (error) {
+    console.error('Service Worker: Cache installation failed:', error);
+  }
+};
+
 self.addEventListener('install', (event) => {
   console.log('Service Worker: Installing...');
-  event.waitUntil(
-    caches
-      .open(STATIC_CACHE)
-      .then((cache) => {
-        console.log('Service Worker: Caching static assets');
-        return cache.addAll(STATIC_ASSETS);
-      })
-      .then(() => {
-        console.log('Service Worker: Static assets cached');
-        return self.skipWaiting();
-      })
-      .catch((error) => {
-        console.error('Service Worker: Cache installation failed:', error);
-      }),
-  );
+  event.waitUntil(installServiceWorker());
 });
 
-self.addEventListener('activate', async (event) => {
+const activateServiceWorker = async () => {
   console.log('Service Worker: Activating...');
-  const ops = await caches.keys().map((key) => {
+  const cacheKeys = await caches.keys();
+  const ops = cacheKeys.map((key) => {
     if (key !== STATIC_CACHE && key !== DYNAMIC_CACHE) {
       console.log('Service Worker: Deleting old cache:', key);
       return caches.delete(key);
     }
     return null;
   });
-  event.waitUntil(Promise.all(ops));
+  await Promise.all(ops);
   console.log('Service Worker: Activated');
   return self.clients.claim();
+};
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(activateServiceWorker());
 });
+
+const handleFetch = async (request) => {
+  const response = await caches.match(request);
+  if (response) return response;
+  
+  const fetchRequest = request.clone();
+  try {
+    const fetchResponse = await fetch(fetchRequest);
+    if (
+      !fetchResponse ||
+      fetchResponse.status !== 200 ||
+      fetchResponse.type !== 'basic'
+    ) {
+      return fetchResponse;
+    }
+    
+    const responseToCache = fetchResponse.clone();
+    const cache = await caches.open(DYNAMIC_CACHE);
+    cache.put(request, responseToCache);
+    return fetchResponse;
+  } catch (error) {
+    if (request.destination === 'document') {
+      return caches.match('/404.html');
+    }
+    return null;
+  }
+};
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
@@ -132,33 +166,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(handleApiRequest(request));
     return;
   }
-  event.respondWith(
-    caches.match(request).then((response) => {
-      if (response) return response;
-      const fetchRequest = request.clone();
-      return fetch(fetchRequest)
-        .then((response) => {
-          if (
-            !response ||
-            response.status !== 200 ||
-            response.type !== 'basic'
-          ) {
-            return response;
-          }
-          const responseToCache = response.clone();
-          caches.open(DYNAMIC_CACHE).then((cache) => {
-            cache.put(request, responseToCache);
-          });
-          return response;
-        })
-        .catch(() => {
-          if (request.destination === 'document') {
-            return caches.match('/404.html');
-          }
-          return null;
-        });
-    }),
-  );
+  event.respondWith(handleFetch(request));
 });
 
 self.addEventListener('sync', (event) => {
@@ -201,6 +209,6 @@ self.addEventListener('message', (event) => {
     self.skipWaiting();
   }
   if (event.data && event.data.type === 'STORE_OFFLINE_ACTION') {
-    event.waitUntil(storeOfflineAction(event.data.action));
+    event.waitUntil(storeOfflineAction(event.data));
   }
 });

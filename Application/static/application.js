@@ -24,6 +24,8 @@ class Logger {
   }
 }
 
+const generateId = () => Math.random().toString(36).substr(2, 9);
+
 class Application {
   constructor() {
     this.logger = new Logger('output');
@@ -47,7 +49,7 @@ class Application {
     }, 2000);
     this.clientId = localStorage.getItem('clientId');
     if (!this.clientId) {
-      this.clientId = Math.random().toString(36).substr(2, 9);
+      this.clientId = generateId();
       localStorage.setItem('clientId', this.clientId);
     }
   }
@@ -165,7 +167,8 @@ class Application {
 
     const timestamp = new Date().toISOString();
     const clientId = this.clientId;
-    const data = { type: 'message', content, timestamp, clientId };
+    const id = generateId();
+    const data = { id, type: 'message', content, timestamp, clientId };
 
     if (this.connected) {
       this.websocket.send(JSON.stringify(data));
@@ -177,14 +180,14 @@ class Application {
     }
   }
 
-  handleWebSocketMessage(data) {
-    if (data.type === 'broadcast') {
-      this.logger.log('Broadcast:', data.message);
-      this.showNotification(`Broadcast: ${data.message}`, 'info');
-    } else if (data.type === 'userCount') {
-      this.logger.log(`Active users: ${data.count}`);
-    } else if (data.type === 'system') {
-      this.logger.log('System:', data.message);
+  handleWebSocketMessage(msg) {
+    if (msg.type === 'broadcast') {
+      this.logger.log('Broadcast:', msg.content);
+      this.showNotification(`Broadcast: ${msg.content}`);
+    } else if (msg.type === 'userCount') {
+      this.logger.log(`Active users: ${msg.count}`);
+    } else if (msg.type === 'system') {
+      this.logger.log('System:', msg.content);
     }
   }
 
@@ -226,11 +229,9 @@ class Application {
 
   showNotification(message, type = 'info') {
     if (!this.notification) return;
-
     this.notification.textContent = message;
     this.notification.className = `notification ${type}`;
     this.notification.classList.remove('hidden');
-
     setTimeout(() => {
       this.notification.classList.add('hidden');
     }, 3000);
@@ -239,6 +240,7 @@ class Application {
   async storeOfflineAction(data) {
     const timestamp = new Date().toISOString();
     navigator.serviceWorker.controller.postMessage({
+      id: generateId(),
       type: 'STORE_OFFLINE_ACTION',
       data: { type: 'message', data, timestamp },
     });
