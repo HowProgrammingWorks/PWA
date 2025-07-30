@@ -1,0 +1,35 @@
+{
+  "name": "PWA Example Application",
+  "short_name": "PWA Example",
+  "description": "A Progressive Web Application with offline support",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2196F3",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "en",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Connect WebSocket",
+      "short_name": "Connect",
+      "description": "Connect to WebSocket server",
+      "url": "/",
+      "icons": [
+        {
+          "src": "icon.svg",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ]
+} 

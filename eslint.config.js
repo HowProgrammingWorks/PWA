@@ -12,6 +12,7 @@ module.exports = [
       globals: {
         indexedDB: true,
         prompt: true,
+        Notification: true,
       },
     },
   },

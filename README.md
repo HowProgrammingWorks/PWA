@@ -1,13 +1,26 @@
-# Progressive Web Application
+# Progressive Web Application Example
 
-## Quick start
+PWA with offline-first support and WebSocket communication.
 
-1. Install dependencies `npm i`; optionaly run tests: `npm t`
-2. Start server `node server.js`
-3. Open in browser: [`http://127.0.0.1:8000/`](http://127.0.0.1:8000/)
+## Features
 
-## PWA features implemented
+- Can be installed as a native app
+- Works without internet connection
+- Background sync and caching
+- Native app-like experience
+- Works on all devices
+- Real-time notifications
+- Single WebSocket connection shared across tabs
+- Automatic reconnection
+- HTTPS headers and CORS support
 
-## License & Contributors
+## Installation
+
+Prerequisites: - Node.js 18+ 
+
+1. Clone the repository:
+2. Install dependencies: `npm install`
+3. Start the development server: `node server.js`
+4. Open your browser and navigate to: `http://localhost:8000`
 
 Copyright (c) 2025 How.Programming.Works contributors
