@@ -56,6 +56,7 @@ class Application {
   getElements() {
     this.installBtn = document.getElementById('install-btn');
     this.sendMessageBtn = document.getElementById('send-message-btn');
+    this.updateCacheBtn = document.getElementById('update-cache-btn');
     this.clearBtn = document.getElementById('clear-btn');
     this.sendBtn = document.getElementById('send-btn');
     this.messageInput = document.getElementById('message-input');
@@ -67,6 +68,7 @@ class Application {
   setupEventListeners() {
     this.installBtn.onclick = () => this.install();
     this.sendMessageBtn.onclick = () => this.sendMessage();
+    this.updateCacheBtn.onclick = () => this.updateCache();
     this.clearBtn.onclick = () => this.logger.clear();
     this.sendBtn.onclick = () => this.sendMessage();
     this.messageInput.addEventListener('keypress', (event) => {
@@ -129,6 +131,18 @@ class Application {
       this.logger.log('Service worker error:', message.error);
       this.showNotification('Service worker error', 'error');
     }
+    if (message.type === 'cacheUpdated') {
+      this.logger.log('Cache updated successfully');
+      this.showNotification('Cache updated successfully!', 'success');
+      this.updateCacheBtn.disabled = false;
+      this.updateCacheBtn.textContent = 'Update Cache';
+    }
+    if (message.type === 'cacheUpdateFailed') {
+      this.logger.log('Cache update failed:', message.error);
+      this.showNotification('Cache update failed', 'error');
+      this.updateCacheBtn.disabled = false;
+      this.updateCacheBtn.textContent = 'Update Cache';
+    }
   }
 
   async sendMessage() {
@@ -153,6 +167,21 @@ class Application {
     this.logger.log(`Install prompt ${message}`);
     this.prompt = null;
     this.hideInstallButton();
+  }
+
+  async updateCache() {
+    this.logger.log('Requesting cache update...');
+    this.updateCacheBtn.disabled = true;
+    this.updateCacheBtn.textContent = 'Updating...';
+    try {
+      this.worker.postMessage({ type: 'updateCache' });
+      this.showNotification('Cache update requested', 'info');
+    } catch (error) {
+      this.logger.log('Failed to request cache update:', error);
+      this.showNotification('Failed to update cache', 'error');
+      this.updateCacheBtn.disabled = false;
+      this.updateCacheBtn.textContent = 'Update Cache';
+    }
   }
 
   showInstallButton() {
