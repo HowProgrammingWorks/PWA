@@ -4,9 +4,9 @@ const ASSETS = [
   '/',
   '/index.html',
   '/styles.css',
-  '/application.js',
+  '/pwa.js',
+  '/domain.js',
   '/worker.js',
-  '/database.js',
   '/manifest.json',
   '/icon.svg',
   '/favicon.ico',
@@ -24,12 +24,11 @@ const send = (packet) => {
   return true;
 };
 
-const broadcast = async (packet, exclude = null) => {
-  console.log('BROADCAST');
+const broadcast = async (packet, exclude) => {
   const clients = await self.clients.matchAll({ includeUncontrolled: true });
   console.log('Broadcasting to clients:', clients.length, packet);
   for (const client of clients) {
-    if (client !== exclude) {
+    if (client.id !== exclude) {
       console.log('Sending to client:', client.id);
       client.postMessage(packet);
     }
@@ -42,7 +41,6 @@ const updateCache = async () => {
   for (const asset of ASSETS) {
     try {
       await cache.add(asset);
-      console.log('Service Worker: Cached:', asset);
     } catch (error) {
       console.error('Service Worker: Failed to cache:', asset, error);
     }
@@ -61,6 +59,7 @@ const install = async () => {
 };
 
 self.addEventListener('install', (event) => {
+  console.log('Service Worker: Installation...');
   event.waitUntil(install());
 });
 
@@ -76,13 +75,13 @@ const serveFromCache = async (request) => {
 
 const fetchFromNetwork = async (request) => {
   console.log('Service Worker: Fetching from network:', request.url);
-  const networkResponse = await fetch(request);
-  if (networkResponse.status === 200) {
+  const response = await fetch(request);
+  if (response.status === 200) {
     console.log('Service Worker: Caching response:', request.url);
     const cache = await caches.open(CACHE);
-    await cache.put(request, networkResponse.clone());
+    await cache.put(request, response.clone());
   }
-  return networkResponse;
+  return response;
 };
 
 const offlineFallback = async (request) => {
@@ -118,42 +117,28 @@ const cleanupCache = async () => {
   await Promise.all(deletePromises);
 };
 
-const updateCacheHandler = async (event) => {
-  console.log('Service Worker: Manual cache update requested');
-  try {
-    await updateCache();
-    event.source.postMessage({ type: 'cacheUpdated' });
-  } catch (error) {
-    event.source.postMessage({
-      type: 'cacheUpdateFailed',
-      error: error.message,
-    });
-  }
-};
-
 self.addEventListener('fetch', async (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
   if (!request.url.startsWith('http')) return;
+
   const respond = async () => {
     try {
-      const cachedResponse = await serveFromCache(request);
-      if (cachedResponse) return cachedResponse;
+      const response = await serveFromCache(request);
+      if (response) return response;
       return await fetchFromNetwork(request);
     } catch {
       return await offlineFallback(request);
     }
   };
+
   event.respondWith(respond());
 });
 
 const activate = async () => {
   console.log('Service Worker: Activating...');
   try {
-    await Promise.all([
-      cleanupCache(),
-      self.clients.claim(),
-    ]);
+    await Promise.all([cleanupCache(), self.clients.claim()]);
     console.log('Service Worker: Activated successfully');
   } catch (error) {
     console.error('Service Worker: Activation failed:', error);
@@ -177,7 +162,7 @@ const connect = async () => {
     connected = true;
     connecting = false;
     console.log('Service Worker: websocket connected');
-    broadcast({ type: 'status', connected: true });
+    broadcast({ type: 'status', data: { connected: true } });
   };
 
   websocket.onmessage = (event) => {
@@ -187,41 +172,54 @@ const connect = async () => {
   };
 
   websocket.onclose = () => {
-    connected = false;
     console.log('Service Worker: websocket disconnected');
-    broadcast({ type: 'status', connected: false });
+    if (connected) {
+      connected = false;
+      broadcast({ type: 'status', data: { connected } });
+    }
+    connecting = false;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(connect, 3000);
   };
 
-  websocket.onerror = (error) => {
-    console.error('Service Worker: websocket error', error);
-    broadcast({ type: 'error', error: error.message });
-  };
+  //websocket.onerror = (error) => {
+  //  console.error('Service Worker: websocket error', error);
+  //  broadcast({ type: 'error', data: { message: error.message } });
+  //};
 };
 
-const messageHandlers = {
+const events = {
+  connect: (source) => {
+    source.postMessage({ type: 'status', data: { connected } });
+  },
   online: () => connect(),
   offline: () => {
     if (connected) websocket.close();
   },
-  message: (event) => {
-    const packet = { type: 'message', content: event.data.content };
+  message: (source, data) => {
+    const packet = { type: 'message', data };
     send(packet);
-    broadcast(packet, event.source);
+    broadcast(packet, source.id);
   },
-  ping: (event) => {
-    console.log({ event });
-    event.source.postMessage({ type: 'pong' });
+  ping: (source) => {
+    source.postMessage({ type: 'pong' });
   },
-  updateCache: updateCacheHandler,
+  updateCache: async (source) => {
+    console.log('Service Worker: Manual cache update requested');
+    try {
+      await updateCache();
+      source.postMessage({ type: 'cacheUpdated' });
+    } catch (error) {
+      const data = { error: error.message };
+      source.postMessage({ type: 'cacheUpdateFailed', data });
+    }
+  },
 };
 
 self.addEventListener('message', (event) => {
-  console.log('Service Worker: received', event.data);
-  const { type } = event.data;
-  const handler = messageHandlers[type];
-  if (handler) handler(event);
+  const { type, data } = event.data;
+  const handler = events[type];
+  if (handler) handler(event.source, data);
 });
 
 self.addEventListener('beforeunload', (event) => {

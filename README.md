@@ -8,7 +8,7 @@ PWA with offline-first support and WebSocket communication.
 - Works without internet connection
 - Background sync and caching
 - Native app-like experience
-- Works on all devices
+- Works on almost all devices
 - Real-time notifications
 - Single WebSocket connection shared across tabs
 - Automatic reconnection
@@ -18,7 +18,7 @@ PWA with offline-first support and WebSocket communication.
 
 Prerequisites: - Node.js 18+ 
 
-1. Clone the repository:
+1. Clone repo: `git clone git@github.com:HowProgrammingWorks/PWA.git`
 2. Install dependencies: `npm install`
 3. Start the development server: `node server.js`
 4. Open your browser and navigate to: `http://localhost:8000`

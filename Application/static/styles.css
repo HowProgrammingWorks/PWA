@@ -57,12 +57,12 @@ body {
   letter-spacing: 0.5px;
 }
 
-.status-indicator.online {
+.status-indicator.connected {
   background: #10b981;
   color: white;
 }
 
-.status-indicator.offline {
+.status-indicator.disconnected {
   background: #ef4444;
   color: white;
 }
@@ -252,7 +252,6 @@ body {
   }
 }
 
-/* Responsive design */
 @media (max-width: 768px) {
   .app-container {
     padding: 10px;
