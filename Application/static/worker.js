@@ -13,23 +13,120 @@ const ASSETS = [
   '/404.html',
 ];
 
-let websocket = null;
-let connected = false;
-let connecting = false;
-let reconnectTimer = null;
+class SyncWorker {
+  constructor() {
+    this.websocket = null;
+    this.connected = false;
+    this.connecting = false;
+    this.reconnectTimer = null;
+    this.clientId = '';
+    this.lastDeltaId = 0;
+    this.state = new Map();
+    this.queue = [];
+    this.root = null;
+    this.init();
+  }
 
-const send = (packet) => {
-  if (!connected) return false;
-  websocket.send(JSON.stringify(packet));
-  return true;
-};
+  async init() {
+    this.root = await navigator.storage.getDirectory();
+    await this.loadState();
+  }
+
+  delivery(packet) {
+    if (this.connected) {
+      this.send(packet);
+    } else {
+      this.queue.push(packet);
+      this.saveState();
+    }
+  }
+
+  send(packet) {
+    this.websocket.send(JSON.stringify(packet));
+  }
+
+  async loadState() {
+    if (!this.root) return;
+    const file = await this.root.getFileHandle('state.json', { create: true });
+    const reader = await file.getFile();
+    const data = await reader.text();
+    if (!data) return;
+    const parsed = JSON.parse(data);
+    this.lastDeltaId = parsed.lastDeltaId || 0;
+    this.queue = parsed.queue || [];
+    this.clientId = parsed.clientId;
+    const messages = parsed.messages || {};
+    for (const [id, message] of Object.entries(messages)) {
+      this.state.set(id, message);
+    }
+  }
+
+  async saveState() {
+    if (!this.root) return;
+    const messages = {};
+    for (const [key, value] of this.state.entries()) {
+      messages[key] = value;
+    }
+    const state = {
+      clientId: this.clientId,
+      lastDeltaId: this.lastDeltaId,
+      queue: this.queue,
+      messages,
+    };
+    const file = await this.root.getFileHandle('state.json', { create: true });
+    const writable = await file.createWritable();
+    await writable.write(JSON.stringify(state));
+    await writable.close();
+  }
+
+  applyDelta(records) {
+    for (const record of records) {
+      this.applyCRDT(record);
+    }
+    this.saveState();
+  }
+
+  applyCRDT(delta) {
+    const { strategy, entity, record } = delta;
+    if (entity === 'message' && strategy === 'lww') {
+      this.state.set(record.id, record);
+    } else if (entity === 'reaction' && strategy === 'counter') {
+      const { messageId, reaction } = record;
+      const message = this.state.get(messageId);
+      if (!message) return;
+      if (!message.reactions) message.reactions = {};
+      const count = message.reactions[reaction] || 0;
+      message.reactions[reaction] = count + 1;
+    }
+  }
+
+  async flushQueue() {
+    if (!this.connected) return;
+    if (!this.queue.length) return;
+    for (const packet of this.queue) {
+      this.send(packet);
+    }
+    this.queue = [];
+    await this.saveState();
+  }
+
+  async clearDatabase() {
+    this.state.clear();
+    this.lastDeltaId = 0;
+    this.queue = [];
+    await this.saveState();
+  }
+}
+
+const syncWorker = new SyncWorker();
 
 const broadcast = async (packet, exclude) => {
-  const clients = await self.clients.matchAll({ includeUncontrolled: true });
-  console.log('Broadcasting to clients:', clients.length, packet);
+  const clients = await self.clients.matchAll({
+    includeUncontrolled: true,
+  });
   for (const client of clients) {
     if (client.id !== exclude) {
-      console.log('Sending to client:', client.id);
+      console.log('Broadcasting to:', client.id);
       client.postMessage(packet);
     }
   }
@@ -37,47 +134,26 @@ const broadcast = async (packet, exclude) => {
 
 const updateCache = async () => {
   const cache = await caches.open(CACHE);
-  console.log('Service Worker: Updating cache...');
-  for (const asset of ASSETS) {
-    try {
-      await cache.add(asset);
-    } catch (error) {
-      console.error('Service Worker: Failed to cache:', asset, error);
-    }
-  }
-};
-
-const install = async () => {
-  console.log('Service Worker: Installing...');
-  try {
-    await updateCache();
-    console.log('Service Worker: All assets cached successfully');
-    await self.skipWaiting();
-  } catch (error) {
-    console.error('Service Worker: Failed to cache assets:', error);
-  }
+  await cache.addAll(ASSETS);
 };
 
 self.addEventListener('install', (event) => {
-  console.log('Service Worker: Installation...');
+  const install = async () => {
+    await updateCache();
+    await self.skipWaiting();
+  };
   event.waitUntil(install());
 });
 
 const serveFromCache = async (request) => {
   const cache = await caches.open(CACHE);
-  const cachedResponse = await cache.match(request);
-  if (cachedResponse) {
-    console.log('Service Worker: Serving from cache:', request.url);
-    return cachedResponse;
-  }
-  return null;
+  const response = await cache.match(request);
+  return response;
 };
 
 const fetchFromNetwork = async (request) => {
-  console.log('Service Worker: Fetching from network:', request.url);
   const response = await fetch(request);
   if (response.status === 200) {
-    console.log('Service Worker: Caching response:', request.url);
     const cache = await caches.open(CACHE);
     await cache.put(request, response.clone());
   }
@@ -85,13 +161,8 @@ const fetchFromNetwork = async (request) => {
 };
 
 const offlineFallback = async (request) => {
-  console.log('Service Worker: Network failed, checking cache:', request.url);
   const cachedResponse = await serveFromCache(request);
-  if (cachedResponse) {
-    console.log('Service Worker: Serving from cache (offline):', request.url);
-    return cachedResponse;
-  }
-  console.log('Service Worker: No cache available for:', request.url);
+  if (cachedResponse) return cachedResponse;
   if (request.mode === 'navigate') {
     const cache = await caches.open(CACHE);
     const fallbackResponse = await cache.match('/index.html');
@@ -111,7 +182,6 @@ const cleanupCache = async () => {
   const deletePromises = cacheNames
     .filter((cacheName) => cacheName !== CACHE)
     .map(async (cacheName) => {
-      console.log('Service Worker: Deleting old cache:', cacheName);
       await caches.delete(cacheName);
     });
   await Promise.all(deletePromises);
@@ -121,7 +191,6 @@ self.addEventListener('fetch', async (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
   if (!request.url.startsWith('http')) return;
-
   const respond = async () => {
     try {
       const response = await serveFromCache(request);
@@ -131,12 +200,10 @@ self.addEventListener('fetch', async (event) => {
       return await offlineFallback(request);
     }
   };
-
   event.respondWith(respond());
 });
 
 const activate = async () => {
-  console.log('Service Worker: Activating...');
   try {
     await Promise.all([cleanupCache(), self.clients.claim()]);
     console.log('Service Worker: Activated successfully');
@@ -147,65 +214,86 @@ const activate = async () => {
 
 self.addEventListener('activate', (event) => {
   console.log('Service Worker: Activating...');
-  event.waitUntil(activate());
+  event.waitUntil(
+    (async () => {
+      await activate();
+      await syncWorker.loadState();
+    })(),
+  );
 });
 
 const connect = async () => {
-  if (connected || connecting) return;
-  connecting = true;
+  if (syncWorker.connected || syncWorker.connecting) return;
+  syncWorker.connecting = true;
 
   const protocol = self.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${protocol}//${self.location.host}`;
-  websocket = new WebSocket(url);
+  syncWorker.websocket = new WebSocket(url);
 
-  websocket.onopen = () => {
-    connected = true;
-    connecting = false;
+  syncWorker.websocket.onopen = () => {
+    syncWorker.connected = true;
+    syncWorker.connecting = false;
     console.log('Service Worker: websocket connected');
     broadcast({ type: 'status', data: { connected: true } });
+    const data = { lastDeltaId: syncWorker.lastDeltaId };
+    syncWorker.send({ type: 'sync', data });
+    syncWorker.flushQueue();
   };
 
-  websocket.onmessage = (event) => {
+  syncWorker.websocket.onmessage = (event) => {
     const message = JSON.parse(event.data);
     console.log('Service Worker: websocket message:', message);
+    const { type, data } = message;
+    if (type === 'delta') {
+      syncWorker.lastDeltaId += data.length;
+      syncWorker.applyDelta(data);
+    }
     broadcast(message);
   };
 
-  websocket.onclose = () => {
+  syncWorker.websocket.onclose = () => {
     console.log('Service Worker: websocket disconnected');
-    if (connected) {
-      connected = false;
-      broadcast({ type: 'status', data: { connected } });
+    if (syncWorker.connected) {
+      syncWorker.connected = false;
+      broadcast({ type: 'status', data: { connected: false } });
     }
-    connecting = false;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(connect, 3000);
+    syncWorker.connecting = false;
+    if (syncWorker.reconnectTimer) clearTimeout(syncWorker.reconnectTimer);
+    syncWorker.reconnectTimer = setTimeout(connect, 3000);
   };
-
-  //websocket.onerror = (error) => {
-  //  console.error('Service Worker: websocket error', error);
-  //  broadcast({ type: 'error', data: { message: error.message } });
-  //};
 };
 
 const events = {
-  connect: (source) => {
-    source.postMessage({ type: 'status', data: { connected } });
+  connect: (source, data) => {
+    syncWorker.clientId = data.clientId;
+    source.postMessage({
+      type: 'status',
+      data: { connected: syncWorker.connected },
+    });
+    const messages = {};
+    for (const [key, value] of syncWorker.state.entries()) {
+      messages[key] = value;
+    }
+    console.log({ messages });
+    source.postMessage({ type: 'state', data: messages });
   },
   online: () => connect(),
   offline: () => {
-    if (connected) websocket.close();
+    if (syncWorker.connected) syncWorker.websocket.close();
   },
-  message: (source, data) => {
-    const packet = { type: 'message', data };
-    send(packet);
-    broadcast(packet, source.id);
+  delta: (source, data) => {
+    syncWorker.applyDelta(data);
+    syncWorker.lastDeltaId += data.length;
+    broadcast({ type: 'delta', data }, source.id);
+    syncWorker.delivery({ type: 'delta', data });
+  },
+  username: (source, data) => {
+    broadcast({ type: 'username', data }, source.id);
   },
   ping: (source) => {
     source.postMessage({ type: 'pong' });
   },
   updateCache: async (source) => {
-    console.log('Service Worker: Manual cache update requested');
     try {
       await updateCache();
       source.postMessage({ type: 'cacheUpdated' });
@@ -214,16 +302,26 @@ const events = {
       source.postMessage({ type: 'cacheUpdateFailed', data });
     }
   },
+  clearDatabase: async (source) => {
+    try {
+      await syncWorker.clearDatabase();
+      const messages = {};
+      for (const [key, value] of syncWorker.state.entries()) {
+        messages[key] = value;
+      }
+      broadcast({ type: 'state', data: messages });
+      source.postMessage({ type: 'databaseCleared' });
+    } catch (error) {
+      const data = { error: error.message };
+      source.postMessage({ type: 'databaseClearFailed', data });
+    }
+  },
 };
 
 self.addEventListener('message', (event) => {
   const { type, data } = event.data;
   const handler = events[type];
   if (handler) handler(event.source, data);
-});
-
-self.addEventListener('beforeunload', (event) => {
-  console.log('Service Worker: beforeunload', event);
 });
 
 connect();

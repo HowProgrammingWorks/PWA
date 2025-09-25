@@ -1,6 +1,15 @@
-# Progressive Web Application Example
+# Progressive Web Application with CRDT Sync
 
-PWA with offline-first support and WebSocket communication.
+PWA with offline-first support and CRDT Sync over WebSocket communication.
+
+## Installation
+
+Prerequisites: - Node.js 18+
+
+1. Clone this repository
+2. Install dependencies: `npm i`
+3. Start the development server: `node server.js`
+4. Open your browser and navigate to: `http://localhost:8000`
 
 ## Features
 
@@ -13,14 +22,5 @@ PWA with offline-first support and WebSocket communication.
 - Single WebSocket connection shared across tabs
 - Automatic reconnection
 - HTTPS headers and CORS support
-
-## Installation
-
-Prerequisites: - Node.js 18+ 
-
-1. Clone repo: `git clone git@github.com:HowProgrammingWorks/PWA.git`
-2. Install dependencies: `npm install`
-3. Start the development server: `node server.js`
-4. Open your browser and navigate to: `http://localhost:8000`
 
 Copyright (c) 2025 How.Programming.Works contributors

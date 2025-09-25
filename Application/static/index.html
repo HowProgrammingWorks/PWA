@@ -17,7 +17,7 @@
 <body>
   <div class="app-container">
     <header class="app-header">
-      <h1>PWA Example</h1>
+      <h1>PWA Chat</h1>
       <div class="status-indicators">
         <div id="connection-status" class="status-indicator offline">Offline</div>
         <div id="install-status" class="status-indicator hidden">Install Available</div>
@@ -28,10 +28,18 @@
         <button id="install-btn" class="btn primary hidden">Install App</button>
         <button id="update-cache-btn" class="btn secondary">Update Cache</button>
         <button id="clear-btn" class="btn secondary">Clear Log</button>
+        <button id="clear-messages-btn" class="btn secondary">Clear Database</button>
+      </div>
+      <div class="user-input">
+        <input type="text" id="username-input" placeholder="Enter your username..." />
       </div>
       <div class="message-input">
         <input type="text" id="message-input" placeholder="Enter your message..." />
         <button id="send-btn" class="btn primary">Send</button>
+      </div>
+      <div class="chat-container">
+        <h3>Chat Messages</h3>
+        <div id="chat-messages"></div>
       </div>
       <div class="output-container">
         <h3>Activity Log</h3>
@@ -40,6 +48,26 @@
     </main>
     <div id="notification" class="notification hidden"></div>
   </div>
+
+  <!-- HTML Templates -->
+  <template id="chat-message-template">
+    <div class="chat-message">
+      <div class="message-header">
+        <span class="username"></span>
+        <span class="timestamp"></span>
+      </div>
+      <div class="content"></div>
+      <div class="reactions"></div>
+    </div>
+  </template>
+
+  <template id="reaction-button-template">
+    <button class="reaction-btn">
+      <span class="emoji"></span>
+      <span class="count"></span>
+    </button>
+  </template>
+
   <script type="module" src="./domain.js"></script>
 </body>
 </html>

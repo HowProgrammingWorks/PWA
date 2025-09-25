@@ -59,6 +59,7 @@ class Application extends EventEmitter {
   constructor(config = {}) {
     super();
     this.config = { ...CONFIG_DEFAULTS, ...config };
+    this.state = new Map();
     this.worker = null;
     this.prompt = null;
     this.clientId = getClientId();
@@ -86,7 +87,8 @@ class Application extends EventEmitter {
     worker.ready.then((registration) => {
       setInterval(ping, this.config.pingInterval);
       this.worker = registration.active;
-      this.post({ type: 'connect' });
+      const data = { clientId: this.clientId };
+      this.post({ type: 'connect', data });
     });
     worker.addEventListener('message', (event) => {
       const { type, data } = event.data;
@@ -166,4 +168,4 @@ class Application extends EventEmitter {
   }
 }
 
-export { Application };
+export { Application, generateId };
