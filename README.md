@@ -1,26 +1,40 @@
 # Progressive Web Application with CRDT Sync
 
-PWA with offline-first support and CRDT Sync over WebSocket communication.
+> A PWA with offline-first support and CRDT-based sync over a shared WebSocket connection.
 
 ## Installation
 
-Prerequisites: - Node.js 18+
+Prerequisite: Node.js 18+
 
 1. Clone this repository
 2. Install dependencies: `npm i`
 3. Start the development server: `node server.js`
-4. Open your browser and navigate to: `http://localhost:8000`
+4. Open `http://localhost:8000` in your browser
 
 ## Features
 
-- Can be installed as a native app
-- Works without internet connection
+- Installable like a native app
+- Offline support (works without an internet connection)
 - Background sync and caching
-- Native app-like experience
-- Works on almost all devices
+- App-like UX
+- Broad device support
 - Real-time notifications
 - Single WebSocket connection shared across tabs
 - Automatic reconnection
 - HTTPS headers and CORS support
+
+## TODO
+
+- Changes to `./Application/static/domain.js`
+  - Move Logger to `logger.js` and export it as a singleton
+  - Decompose `ChatApplication`: extract `ui.js` and `domain.js`
+  - Domain logic should live in `domain.js`
+  - Visualization and UI logic should live in `ui.js`
+- Unify CRDT implementations and reuse across the app, service worker, and server
+  - Extract `lww` and `counter` into `crdt.js`; apply the Strategy pattern
+  - Import `crdt.js` from the service worker and server to reuse code
+- Changes to `pwa.js`
+  - Extract utility helpers (e.g., ID generation) into `utils.js`
+  - Move `EventEmitter` into `events.js`
 
 Copyright (c) 2025 How.Programming.Works contributors
