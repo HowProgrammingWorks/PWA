@@ -13,15 +13,15 @@ Prerequisite: Node.js 18+
 
 ## Features
 
-- Installable like a native app
-- Offline support (works without an internet connection)
-- Background sync and caching
-- App-like UX
-- Broad device support
-- Real-time notifications
+- Installable app: a native App-like UX
+- Real-time notifications using Websockets
+- Offline support (works without an internet or server)
+- Background sync and caching with service worker and CRDT
+- Broad device/browser support, Linux, MacOS, Win, iOS, Android
 - Single WebSocket connection shared across tabs
-- Automatic reconnection
+- Automatic reconnection, retrieving lost messages
 - HTTPS headers and CORS support
+- Reactions: like, dislike, etc. with counters
 
 ## TODO
 
