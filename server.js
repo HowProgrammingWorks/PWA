@@ -121,7 +121,7 @@ class SyncServer {
   }
 
   broadcast(data, excludeId = '') {
-    const packet = JSON.stringify(data)
+    const packet = JSON.stringify(data);
     for (const [clientId, socket] of this.connections) {
       if (clientId === excludeId) continue;
       socket.send(packet);

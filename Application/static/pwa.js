@@ -82,7 +82,7 @@ class Application extends EventEmitter {
 
   #setupServiceWorker() {
     const worker = navigator.serviceWorker;
-    worker.register(this.serviceWorker);
+    worker.register(this.serviceWorker, { type: 'module' });
     const ping = () => this.post({ type: 'ping' });
     worker.ready.then((registration) => {
       setInterval(ping, this.config.pingInterval);
