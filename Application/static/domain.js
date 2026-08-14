@@ -156,7 +156,7 @@ class ChatApplication extends Application {
       button.dataset.messageId = message.id;
       button.dataset.reaction = type;
       button.querySelector('.emoji').textContent = emoji;
-      const count = message.reactions?.[type] || 0;
+      const count = message.reactions?.[type] ?? 0;
       button.querySelector('.count').textContent = count;
       container.appendChild(button);
     }
@@ -172,7 +172,7 @@ class ChatApplication extends Application {
         const message = this.state.get(messageId);
         if (message) {
           if (!message.reactions) message.reactions = {};
-          const count = message.reactions[reaction] || 0;
+          const count = message.reactions[reaction] ?? 0;
           message.reactions[reaction] = count + 1;
           this.renderChatMessages();
         }
@@ -262,7 +262,7 @@ app.on('username', (data) => {
   app.username = data;
   app.usernameInput.value = data;
   app.logger.log('Username updated from other tab:', data);
-  app.showNotification('Username updated from other tab: ' + data);
+  app.showNotification(`Username updated from other tab: ${data}`);
 });
 
 app.on('cacheUpdated', () => {
@@ -299,7 +299,7 @@ app.on('delta', (data) => {
       const message = app.state.get(messageId);
       if (!message) continue;
       if (!message.reactions) message.reactions = {};
-      const count = message.reactions[reaction] || 0;
+      const count = message.reactions[reaction] ?? 0;
       message.reactions[reaction] = count + 1;
       app.logger.log(`Reaction from CRDT: ${reaction} for: ${messageId}`);
     }

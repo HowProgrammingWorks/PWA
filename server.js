@@ -87,11 +87,11 @@ class SyncServer {
     const data = await fs.promises.readFile(this.dataFile, 'utf8');
     const parsed = JSON.parse(data);
     this.state.clear();
-    const messages = parsed.messages || {};
+    const messages = parsed.messages ?? {};
     for (const [key, value] of Object.entries(messages)) {
       this.state.set(key, value);
     }
-    this.deltas = parsed.deltas || [];
+    this.deltas = parsed.deltas ?? [];
   }
 
   async saveData() {
@@ -114,7 +114,7 @@ class SyncServer {
       const message = this.state.get(messageId);
       if (!message) return;
       if (!message.reactions) message.reactions = {};
-      const count = message.reactions[reaction] || 0;
+      const count = message.reactions[reaction] ?? 0;
       message.reactions[reaction] = count + 1;
     }
     await this.saveData();

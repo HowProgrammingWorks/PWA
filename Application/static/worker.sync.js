@@ -20,10 +20,10 @@ export class SyncManager {
     const data = await reader.text();
     if (!data) return;
     const parsed = JSON.parse(data);
-    this.lastDeltaId = parsed.lastDeltaId || 0;
-    this.queue = parsed.queue || [];
+    this.lastDeltaId = parsed.lastDeltaId ?? 0;
+    this.queue = parsed.queue ?? [];
     this.clientId = parsed.clientId;
-    const messages = parsed.messages || {};
+    const messages = parsed.messages ?? {};
     for (const [id, message] of Object.entries(messages)) {
       this.state.set(id, message);
     }
@@ -63,7 +63,7 @@ export class SyncManager {
       const message = this.state.get(messageId);
       if (!message) return;
       if (!message.reactions) message.reactions = {};
-      const count = message.reactions[reaction] || 0;
+      const count = message.reactions[reaction] ?? 0;
       message.reactions[reaction] = count + 1;
     }
   }

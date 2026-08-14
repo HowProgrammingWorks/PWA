@@ -36,7 +36,7 @@ class EventEmitter {
   }
 
   emit(eventName, ...args) {
-    const listeners = this.events[eventName] || [];
+    const listeners = this.events[eventName] ?? [];
     if (!listeners) return false;
     for (const listener of listeners) {
       try {
