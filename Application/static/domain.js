@@ -1,4 +1,14 @@
-import { Application, generateId } from './pwa.js';
+import { REACTIONS, mergeDelta } from './crdt.js';
+import { generateUUID } from './metautil.js';
+import { Application } from './pwa.js';
+
+const EMOJI = {
+  like: '👍',
+  dislike: '👎',
+  love: '❤️',
+  smile: '😊',
+  poo: '💩',
+};
 
 class Logger {
   #output;
@@ -24,14 +34,11 @@ class Logger {
   }
 }
 
-const REACTIONS = { like: 0, dislike: 0, love: 0, smile: 0, poo: 0 };
-
 class ChatApplication extends Application {
   constructor(config = {}) {
     super(config);
     this.username = '';
     this.syncTimeout = null;
-    this.config = config;
   }
 
   getElements() {
@@ -55,9 +62,9 @@ class ChatApplication extends Application {
     this.updateCacheBtn.onclick = () => this.updateCache();
     this.clearBtn.onclick = () => this.logger.clear();
     this.clearMessagesBtn.onclick = () => this.clearDatabase();
-    this.sendBtn.onclick = () => this.sendMessage();
+    this.sendBtn.onclick = () => this.submit();
     this.messageInput.addEventListener('keypress', (event) => {
-      if (event.key === 'Enter') this.sendMessage();
+      if (event.key === 'Enter') this.submit();
     });
     this.usernameInput.addEventListener('blur', () => this.syncUsername());
     this.usernameInput.addEventListener('keypress', (event) => {
@@ -89,9 +96,27 @@ class ChatApplication extends Application {
     this.username = username;
     if (this.syncTimeout) clearTimeout(this.syncTimeout);
     this.syncTimeout = setTimeout(() => {
-      this.post({ type: 'username', data: this.username });
-      this.logger.log('Username auto-synced:', this.username);
+      const { username } = this;
+      this.api.chat.username({ username }).catch((error) => this.report(error));
+      this.logger.log('Username auto-synced:', username);
     }, this.config.syncTimeout);
+  }
+
+  report(error) {
+    this.logger.log('Request failed:', error.message);
+    this.showNotification('Request failed', 'error');
+  }
+
+  submit() {
+    this.sendMessage().catch((error) => this.report(error));
+  }
+
+  // Every tab, the sender included, renders deltas broadcast by the worker
+  async sendDelta(entity, strategy, record) {
+    const id = generateUUID();
+    const deltas = [{ id, strategy, entity, record }];
+    const { delivered } = await this.api.chat.delta({ deltas });
+    return delivered;
   }
 
   async sendMessage() {
@@ -106,16 +131,18 @@ class ChatApplication extends Application {
       this.showNotification('Please enter a username', 'warning');
       return;
     }
-    const delta = this.addMessage(content);
-    this.post({ type: 'delta', data: [delta] });
-    if (this.connected) {
+    const id = generateUUID();
+    const { username } = this;
+    const timestamp = Date.now();
+    const record = { id, username, timestamp, content };
+    const delivered = await this.sendDelta('message', 'lww', record);
+    if (delivered) {
       this.logger.log('Sent message:', content);
       this.showNotification('Message sent!', 'success');
     } else {
       this.logger.log('Message queued (offline):', content);
       this.showNotification('Message queued - will send when online', 'info');
     }
-    this.renderChatMessages();
   }
 
   renderChatMessages() {
@@ -143,20 +170,13 @@ class ChatApplication extends Application {
   }
 
   addReactionButtons(container, message) {
-    const reactions = [
-      { type: 'like', emoji: '👍' },
-      { type: 'dislike', emoji: '👎' },
-      { type: 'love', emoji: '❤️' },
-      { type: 'smile', emoji: '😊' },
-      { type: 'poo', emoji: '💩' },
-    ];
-    for (const { type, emoji } of reactions) {
+    for (const type of REACTIONS) {
       const el = this.reactionTemplate.content.cloneNode(true);
       const button = el.querySelector('.reaction-btn');
       button.dataset.messageId = message.id;
       button.dataset.reaction = type;
-      button.querySelector('.emoji').textContent = emoji;
-      const count = message.reactions?.[type] ?? 0;
+      button.querySelector('.emoji').textContent = EMOJI[type];
+      const count = message.reactions?.[type] || 0;
       button.querySelector('.count').textContent = count;
       container.appendChild(button);
     }
@@ -168,26 +188,29 @@ class ChatApplication extends Application {
       const { messageId, reaction } = btn.dataset;
       btn.addEventListener('click', () => {
         const record = { messageId, reaction };
-        const delta = { strategy: 'counter', entity: 'reaction', record };
-        const message = this.state.get(messageId);
-        if (message) {
-          if (!message.reactions) message.reactions = {};
-          const count = message.reactions[reaction] ?? 0;
-          message.reactions[reaction] = count + 1;
-          this.renderChatMessages();
-        }
-        this.post({ type: 'delta', data: [delta] });
+        const request = this.sendDelta('reaction', 'counter', record);
+        request.catch((error) => this.report(error));
         this.logger.log('Added reaction:', reaction, 'to message:', messageId);
       });
     }
   }
 
-  updateCache() {
+  async updateCache() {
     this.logger.log('Requesting cache update...');
     this.updateCacheBtn.disabled = true;
     this.updateCacheBtn.textContent = 'Updating...';
     this.showNotification('Cache update requested', 'info');
-    this.post({ type: 'updateCache' });
+    try {
+      await this.api.cache.update();
+      this.logger.log('Cache updated successfully');
+      this.showNotification('Cache updated successfully!', 'success');
+    } catch (error) {
+      this.logger.log('Cache update failed:', error.message);
+      this.showNotification('Cache update failed', 'error');
+    } finally {
+      this.updateCacheBtn.disabled = false;
+      this.updateCacheBtn.textContent = 'Update Cache';
+    }
   }
 
   showInstallButton(visible = true) {
@@ -211,32 +234,28 @@ class ChatApplication extends Application {
     }, this.config.notificationTimeout);
   }
 
-  clearDatabase() {
+  async clearDatabase() {
     this.logger.log('Requesting database clear...');
     this.clearMessagesBtn.disabled = true;
     this.clearMessagesBtn.textContent = 'Clearing...';
     this.showNotification('Database clear requested', 'info');
-    this.post({ type: 'clearDatabase' });
-  }
-
-  addMessage(content) {
-    const id = generateId();
-    const username = this.username;
-    const timestamp = Date.now();
-    const reactions = { ...REACTIONS };
-    const message = { id, username, timestamp, content, reactions };
-    this.state.set(id, message);
-    return { strategy: 'lww', entity: 'message', record: message };
+    // Worker broadcasts chat/state to every tab before it replies
+    try {
+      await this.api.chat.clear();
+      this.logger.log('Database cleared successfully');
+      this.showNotification('Database cleared successfully!', 'success');
+    } catch (error) {
+      this.logger.log('Database clear failed:', error.message);
+      this.showNotification('Database clear failed', 'error');
+    } finally {
+      this.clearMessagesBtn.disabled = false;
+      this.clearMessagesBtn.textContent = 'Clear Database';
+    }
   }
 }
 
 const logger = new Logger('output');
 const app = new ChatApplication({ logger, syncTimeout: 2000 });
-
-app.on('message', (data) => {
-  app.showNotification(`Message: ${data.content}`, 'info');
-  app.logger.log('Message:', data.content);
-});
 
 app.on('status', (data) => {
   if (data.connected) {
@@ -251,9 +270,8 @@ app.on('status', (data) => {
 
 app.on('state', (state) => {
   app.state.clear();
-  for (const [key, value] of Object.entries(state)) {
-    app.state.set(key, value);
-  }
+  const ids = Object.keys(state);
+  for (const id of ids) app.state.set(id, state[id]);
   app.renderChatMessages();
   app.logger.log('State updated from worker');
 });
@@ -265,43 +283,17 @@ app.on('username', (data) => {
   app.showNotification(`Username updated from other tab: ${data}`);
 });
 
-app.on('cacheUpdated', () => {
-  app.logger.log('Cache updated successfully');
-  app.showNotification('Cache updated successfully!', 'success');
-  app.updateCacheBtn.disabled = false;
-  app.updateCacheBtn.textContent = 'Update Cache';
-});
-
-app.on('cacheUpdateFailed', (data) => {
-  app.logger.log('Cache update failed:', data.error);
-  app.showNotification('Cache update failed', 'error');
-  app.updateCacheBtn.disabled = false;
-  app.updateCacheBtn.textContent = 'Update Cache';
-});
-
-app.on('databaseCleared', () => {
-  app.state.clear();
-  app.renderChatMessages();
-  app.logger.log('Database cleared successfully');
-  app.showNotification('Database cleared successfully!', 'success');
-  app.clearMessagesBtn.disabled = false;
-  app.clearMessagesBtn.textContent = 'Clear Database';
-});
-
-app.on('delta', (data) => {
-  for (const delta of data) {
-    const { strategy, entity, record } = delta;
-    if (entity === 'message' && strategy === 'lww') {
-      app.state.set(record.id, record);
+app.on('delta', (deltas) => {
+  for (const delta of deltas) {
+    const applied = mergeDelta(app.state, delta);
+    if (!applied) continue;
+    const { entity, record } = delta;
+    if (entity === 'message') {
       app.logger.log('Message updated from CRDT:', record.id);
-    } else if (entity === 'reaction' && strategy === 'counter') {
-      const { messageId, reaction } = record;
-      const message = app.state.get(messageId);
-      if (!message) continue;
-      if (!message.reactions) message.reactions = {};
-      const count = message.reactions[reaction] ?? 0;
-      message.reactions[reaction] = count + 1;
-      app.logger.log(`Reaction from CRDT: ${reaction} for: ${messageId}`);
+    } else if (entity === 'reaction') {
+      const { reaction, messageId } = record;
+      const text = `Reaction from CRDT: ${reaction} for: ${messageId}`;
+      app.logger.log(text);
     }
   }
   app.renderChatMessages();

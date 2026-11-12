@@ -11,7 +11,11 @@
   "dependencies": {
     "eslint": "^9.39.02",
     "eslint-config-metarhia": "^9.1.5",
-    "prettier": "^3.8.1",
-    "ws": "^8.19.0"
+    "metacom": "github:metarhia/metacom#master",
+    "metautil": "^5.5.2",
+    "prettier": "^3.8.1"
+  },
+  "overrides": {
+    "minimatch": "^11.0.1"
   }
 }

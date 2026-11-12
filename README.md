@@ -2,6 +2,10 @@
 
 > A PWA with offline-first support and CRDT-based sync over a shared WebSocket connection.
 
+Communication is built on [Metacom](https://github.com/metarhia/metacom):
+tabs call the service worker with `Metacom` client, the service worker holds
+one connection to the server with `MetacomProxy`.
+
 ## Installation
 
 Prerequisite: Node.js 18+
@@ -20,6 +24,35 @@ Prerequisite: Node.js 18+
 - Broad device/browser support, Linux, MacOS, Win, iOS, Android
 - Single WebSocket connection shared across tabs
 - Automatic reconnection, retrieving lost messages
+- RPC and events between tabs, service worker and server with Metacom
+
+## Structure
+
+| File               | Role                                                  |
+| ------------------ | ----------------------------------------------------- |
+| `server.js`        | Static files and metacom server: `chat` unit          |
+| `worker.js`        | `MetacomProxy`, local `chat` and `cache` units        |
+| `worker.sync.js`   | Local state and offline queue in OPFS                 |
+| `worker.static.js` | Static cache                                          |
+| `pwa.js`           | Application base: service worker and `Metacom` client |
+| `domain.js`        | Chat UI and domain logic                              |
+
+| Call             | Handled by | Description                                 |
+| ---------------- | ---------- | ------------------------------------------- |
+| `chat/state`     | worker     | Messages from local state                   |
+| `chat/delta`     | worker     | Apply, pass to all tabs, queue and send     |
+| `chat/username`  | worker     | Pass username to other tabs                 |
+| `chat/clear`     | worker     | Clear local state                           |
+| `cache/update`   | worker     | Reload static cache                         |
+| `chat/subscribe` | server     | Receive `chat/log` events                   |
+| `chat/sync`      | server     | Log entries after `lastDeltaId`, log length |
+| `chat/delta`     | server     | Called by worker: apply, append to log      |
+
+Events from worker to tabs: `chat/delta`, `chat/state`, `chat/username`.
+Event from server to workers: `chat/log` with `{ deltas, lastDeltaId }`,
+the sender gets its own batch back. `lastDeltaId` is a position in the
+server log, so the worker applies log entries in order and skips repeats.
+
 - HTTPS headers and CORS support
 - Reactions: like, dislike, etc. with counters
 
