@@ -1,16 +1,9 @@
-import { applyDeltas, copyReactions, snapshotDelta } from './crdt.js';
+import { applyDeltas } from './crdt.js';
 
 const ignore = () => {};
 
-const messagesFrom = (state) => {
-  const messages = {};
-  for (const id of state.keys()) messages[id] = state.get(id);
-  return messages;
-};
-
 export class SyncManager {
   constructor() {
-    this.clientId = '';
     this.lastDeltaId = 0;
     this.state = new Map();
     this.applied = new Set();
@@ -20,6 +13,7 @@ export class SyncManager {
   }
 
   #saving = Promise.resolve();
+  #pending = null;
 
   async init() {
     this.root = await navigator.storage.getDirectory();
@@ -27,54 +21,37 @@ export class SyncManager {
   }
 
   async loadState() {
-    if (!this.root) return;
     const file = await this.root.getFileHandle('state.json', { create: true });
     const reader = await file.getFile();
     const data = await reader.text();
     if (!data) return;
     const parsed = JSON.parse(data);
     this.lastDeltaId = parsed.lastDeltaId || 0;
-    this.clientId = parsed.clientId || '';
-    this.queue = [];
-    const storedQueue = parsed.queue || [];
-    for (const delta of storedQueue) {
-      this.queue.push(snapshotDelta(delta));
-    }
-    const storedApplied = parsed.applied || [];
-    for (const id of storedApplied) this.applied.add(id);
+    this.queue = parsed.queue || [];
+    for (const id of parsed.applied || []) this.applied.add(id);
     const messages = parsed.messages || {};
-    const ids = Object.keys(messages);
-    for (const id of ids) {
-      const stored = messages[id];
-      const reactions = copyReactions(stored.reactions);
-      const message = {
-        id: stored.id,
-        username: stored.username,
-        timestamp: stored.timestamp,
-        content: stored.content,
-        reactions,
-      };
-      this.state.set(id, message);
-    }
+    for (const id of Object.keys(messages)) this.state.set(id, messages[id]);
   }
 
-  async saveState() {
-    const saving = this.#saving.then(() => this.#write());
-    this.#saving = saving.then(ignore, ignore);
-    await saving;
+  // Saves requested before a write starts share it: write reads latest state
+  saveState() {
+    if (this.#pending) return this.#pending;
+    const pending = this.#saving.then(() => {
+      this.#pending = null;
+      return this.#write();
+    });
+    this.#pending = pending;
+    this.#saving = pending.then(ignore, ignore);
+    return pending;
   }
 
   async #write() {
     if (!this.root) return;
-    const messages = messagesFrom(this.state);
-    const applied = [];
-    for (const id of this.applied) applied.push(id);
     const state = {
-      clientId: this.clientId,
       lastDeltaId: this.lastDeltaId,
       queue: this.queue,
-      applied,
-      messages,
+      applied: Array.from(this.applied),
+      messages: this.getMessages(),
     };
     const file = await this.root.getFileHandle('state.json', { create: true });
     const writable = await file.createWritable();
@@ -97,7 +74,7 @@ export class SyncManager {
   }
 
   getMessages() {
-    return messagesFrom(this.state);
+    return Object.fromEntries(this.state);
   }
 }
 

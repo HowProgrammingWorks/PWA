@@ -1,5 +1,4 @@
 import { MetacomProxy } from './metacom.js';
-import { snapshotDelta } from './crdt.js';
 import { syncManager } from './worker.sync.js';
 import { cacheManager } from './worker.static.js';
 
@@ -9,9 +8,7 @@ const receive = (deltas) => {
 };
 
 const enqueue = async (deltas) => {
-  const copies = [];
-  for (const delta of deltas) copies.push(snapshotDelta(delta));
-  syncManager.queue = syncManager.queue.concat(copies);
+  syncManager.queue = syncManager.queue.concat(deltas);
   await syncManager.saveState();
 };
 
@@ -51,7 +48,7 @@ const synchronize = async (server, proxy) => {
   await syncManager.ready;
   await server.load('chat');
   const { chat } = server.api;
-  if (chat.listenerCount('delta') === 0) chat.on('delta', receive);
+  if (!chat.listeners('delta').includes(receive)) chat.on('delta', receive);
   await chat.subscribe();
   const { lastDeltaId } = syncManager;
   const { deltas } = await chat.sync({ lastDeltaId });

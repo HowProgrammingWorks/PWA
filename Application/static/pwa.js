@@ -1,17 +1,6 @@
 import { Emitter } from './metautil.js';
 import { Metacom } from './metacom.js';
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
-
-const getClientId = () => {
-  let clientId = localStorage.getItem('clientId');
-  if (!clientId) {
-    clientId = generateId();
-    localStorage.setItem('clientId', clientId);
-  }
-  return clientId;
-};
-
 const CONFIG_DEFAULTS = {
   notificationTimeout: 3000,
   serviceWorker: './worker.js',
@@ -22,10 +11,8 @@ class Application extends Emitter {
     super();
     this.config = { ...CONFIG_DEFAULTS, ...config };
     this.state = new Map();
-    this.metacom = null;
     this.api = null;
     this.prompt = null;
-    this.clientId = getClientId();
     this.serviceWorker = this.config.serviceWorker;
     this.logger = this.config.logger;
     this.online = navigator.onLine;
@@ -63,7 +50,6 @@ class Application extends Emitter {
     });
     await metacom.open();
     await metacom.load('chat', 'cache');
-    this.metacom = metacom;
     this.api = metacom.api;
     const { chat } = metacom.api;
     chat.on('delta', (deltas) => this.emit('delta', deltas));
@@ -133,4 +119,4 @@ class Application extends Emitter {
   }
 }
 
-export { Application, generateId };
+export { Application };

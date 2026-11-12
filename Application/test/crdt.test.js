@@ -79,3 +79,18 @@ test('queued message keeps reactions from snapshot time', () => {
   const state = replay([queued, like('like-1', 'm1')]);
   assert.equal(state.get('m1').reactions.like, 1);
 });
+
+test('applying a message does not alias its record', () => {
+  const record = message('m1', 'hello');
+  const created = { id: 'create', strategy: 'lww', entity: 'message', record };
+  const state = replay([created, like('like-1', 'm1')]);
+  assert.equal(state.get('m1').reactions.like, 1);
+  assert.equal(record.reactions.like, 0);
+});
+
+test('a reaction missing from stored counters starts from zero', () => {
+  const stored = { ...message('m1', 'hello'), reactions: {} };
+  const state = new Map([['m1', stored]]);
+  applyDeltas(state, [like('like-1', 'm1')], new Set());
+  assert.equal(state.get('m1').reactions.like, 1);
+});

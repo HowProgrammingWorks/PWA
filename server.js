@@ -103,19 +103,20 @@ class SyncServer {
     this.crdt.applyDeltas(this.state, this.deltas, this.applied);
   }
 
+  // State is rebuilt from deltas on load, so only deltas are stored
   async saveData() {
-    const state = {};
-    for (const id of this.state.keys()) state[id] = this.state.get(id);
-    const data = JSON.stringify({ messages: state, deltas: this.deltas });
+    const data = JSON.stringify({ deltas: this.deltas });
     await fs.promises.writeFile(this.dataFile, data);
   }
 
-  async applyDelta(delta) {
-    const applied = this.crdt.applyDelta(this.state, delta, this.applied);
-    if (!applied) return false;
-    this.deltas.push(this.crdt.snapshotDelta(delta));
+  async applyDeltas(deltas) {
+    const { crdt } = this;
+    const clean = deltas.map(crdt.snapshotDelta);
+    const fresh = crdt.applyDeltas(this.state, clean, this.applied);
+    if (fresh.length === 0) return fresh;
+    this.deltas.push(...fresh);
     await this.saveData();
-    return true;
+    return fresh;
   }
 
   // One client is one browser: its service worker shares the connection
@@ -149,11 +150,7 @@ const createApi = (sync) => ({
     },
 
     delta: async ({ deltas }, context) => {
-      const fresh = [];
-      for (const delta of deltas) {
-        const applied = await sync.applyDelta(delta);
-        if (applied) fresh.push(delta);
-      }
+      const fresh = await sync.applyDeltas(deltas);
       if (fresh.length > 0) sync.broadcast(fresh, context.client);
       return { applied: fresh.length };
     },

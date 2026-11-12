@@ -22,19 +22,21 @@ const deltaId = (delta) => {
   return '';
 };
 
-// The queued message used to be the same object as local state, so a later
-// like rewrote the snapshot. Replaying that log added the like twice.
+const createMessage = (record, reactions) => ({
+  id: record.id,
+  username: record.username,
+  timestamp: record.timestamp,
+  content: record.content,
+  reactions,
+});
+
+// Keeps only known fields of a delta received from the network
 const snapshotDelta = (delta) => {
   const id = deltaId(delta);
   const { strategy, entity, record } = delta;
   if (entity === 'message') {
-    const message = {
-      id: record.id,
-      username: record.username,
-      timestamp: record.timestamp,
-      content: record.content,
-      reactions: copyReactions(record.reactions),
-    };
+    const reactions = copyReactions(record.reactions);
+    const message = createMessage(record, reactions);
     return { id, strategy, entity, record: message };
   }
   const reaction = {
@@ -44,26 +46,20 @@ const snapshotDelta = (delta) => {
   return { id, strategy, entity, record: reaction };
 };
 
+// State never holds the record itself: when queued message was the same
+// object as local state, a later like rewrote it and replay added it twice
 const applyMessage = (state, record) => {
-  const current = state.get(record.id) ?? null;
+  const current = state.get(record.id);
   const reactions = current ? current.reactions : emptyReactions();
-  const message = {
-    id: record.id,
-    username: record.username,
-    timestamp: record.timestamp,
-    content: record.content,
-    reactions,
-  };
-  state.set(record.id, message);
+  state.set(record.id, createMessage(record, reactions));
   return true;
 };
 
 const applyReaction = (state, record) => {
   const message = state.get(record.messageId);
-  if (!message) return false;
   const { reaction } = record;
-  if (!Object.hasOwn(message.reactions, reaction)) return false;
-  const count = message.reactions[reaction];
+  if (!message || !REACTIONS.includes(reaction)) return false;
+  const count = message.reactions[reaction] || 0;
   message.reactions[reaction] = count + 1;
   return true;
 };
@@ -74,10 +70,9 @@ const APPLY = {
 };
 
 const applyDelta = (state, delta, applied) => {
-  const id = typeof delta.id === 'string' ? delta.id : '';
+  const id = deltaId(delta);
   if (id !== '' && applied.has(id)) return false;
-  const strategies = APPLY[delta.entity];
-  const apply = strategies ? strategies[delta.strategy] : undefined;
+  const apply = APPLY[delta.entity]?.[delta.strategy];
   if (!apply) return false;
   const changed = apply(state, delta.record);
   if (changed && id !== '') applied.add(id);
@@ -92,10 +87,4 @@ const applyDeltas = (state, deltas, applied) => {
   return fresh;
 };
 
-export {
-  emptyReactions,
-  copyReactions,
-  snapshotDelta,
-  applyDelta,
-  applyDeltas,
-};
+export { emptyReactions, snapshotDelta, applyDelta, applyDeltas };

@@ -1,5 +1,6 @@
 import { applyDelta, emptyReactions } from './crdt.js';
-import { Application, generateId } from './pwa.js';
+import { generateUUID } from './metautil.js';
+import { Application } from './pwa.js';
 
 class Logger {
   #output;
@@ -183,7 +184,7 @@ class ChatApplication extends Application {
       const { messageId, reaction } = btn.dataset;
       btn.addEventListener('click', () => {
         const record = { messageId, reaction };
-        const id = generateId();
+        const id = generateUUID();
         const delta = { id, strategy: 'counter', entity: 'reaction', record };
         applyDelta(this.state, delta, this.seen);
         this.renderChatMessages();
@@ -200,9 +201,14 @@ class ChatApplication extends Application {
     this.showNotification('Cache update requested', 'info');
     try {
       await this.api.cache.update();
-      this.emit('cacheUpdated');
+      this.logger.log('Cache updated successfully');
+      this.showNotification('Cache updated successfully!', 'success');
     } catch (error) {
-      this.emit('cacheUpdateFailed', { error: error.message });
+      this.logger.log('Cache update failed:', error.message);
+      this.showNotification('Cache update failed', 'error');
+    } finally {
+      this.updateCacheBtn.disabled = false;
+      this.updateCacheBtn.textContent = 'Update Cache';
     }
   }
 
@@ -232,21 +238,27 @@ class ChatApplication extends Application {
     this.clearMessagesBtn.disabled = true;
     this.clearMessagesBtn.textContent = 'Clearing...';
     this.showNotification('Database clear requested', 'info');
+    // Worker broadcasts chat/state to every tab before it replies
     try {
       await this.api.chat.clear();
-      this.emit('databaseCleared');
+      this.logger.log('Database cleared successfully');
+      this.showNotification('Database cleared successfully!', 'success');
     } catch (error) {
-      this.emit('databaseClearFailed', { error: error.message });
+      this.logger.log('Database clear failed:', error.message);
+      this.showNotification('Database clear failed', 'error');
+    } finally {
+      this.clearMessagesBtn.disabled = false;
+      this.clearMessagesBtn.textContent = 'Clear Database';
     }
   }
 
   addMessage(content) {
-    const id = generateId();
+    const id = generateUUID();
     const username = this.username;
     const timestamp = Date.now();
     const reactions = emptyReactions();
     const record = { id, username, timestamp, content, reactions };
-    const deltaId = generateId();
+    const deltaId = generateUUID();
     const delta = { id: deltaId, strategy: 'lww', entity: 'message', record };
     applyDelta(this.state, delta, this.seen);
     return delta;
@@ -255,11 +267,6 @@ class ChatApplication extends Application {
 
 const logger = new Logger('output');
 const app = new ChatApplication({ logger, syncTimeout: 2000 });
-
-app.on('message', (data) => {
-  app.showNotification(`Message: ${data.content}`, 'info');
-  app.logger.log('Message:', data.content);
-});
 
 app.on('status', (data) => {
   if (data.connected) {
@@ -285,37 +292,7 @@ app.on('username', (data) => {
   app.username = data;
   app.usernameInput.value = data;
   app.logger.log('Username updated from other tab:', data);
-  app.showNotification('Username updated from other tab: ' + data);
-});
-
-app.on('cacheUpdated', () => {
-  app.logger.log('Cache updated successfully');
-  app.showNotification('Cache updated successfully!', 'success');
-  app.updateCacheBtn.disabled = false;
-  app.updateCacheBtn.textContent = 'Update Cache';
-});
-
-app.on('cacheUpdateFailed', (data) => {
-  app.logger.log('Cache update failed:', data.error);
-  app.showNotification('Cache update failed', 'error');
-  app.updateCacheBtn.disabled = false;
-  app.updateCacheBtn.textContent = 'Update Cache';
-});
-
-app.on('databaseCleared', () => {
-  app.state.clear();
-  app.renderChatMessages();
-  app.logger.log('Database cleared successfully');
-  app.showNotification('Database cleared successfully!', 'success');
-  app.clearMessagesBtn.disabled = false;
-  app.clearMessagesBtn.textContent = 'Clear Database';
-});
-
-app.on('databaseClearFailed', (data) => {
-  app.logger.log('Database clear failed:', data.error);
-  app.showNotification('Database clear failed', 'error');
-  app.clearMessagesBtn.disabled = false;
-  app.clearMessagesBtn.textContent = 'Clear Database';
+  app.showNotification(`Username updated from other tab: ${data}`);
 });
 
 app.on('delta', (deltas) => {
