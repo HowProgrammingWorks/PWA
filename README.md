@@ -37,18 +37,21 @@ Prerequisite: Node.js 18+
 | `pwa.js`           | Application base: service worker and `Metacom` client |
 | `domain.js`        | Chat UI and domain logic                              |
 
-| Call             | Handled by | Description                              |
-| ---------------- | ---------- | ---------------------------------------- |
-| `chat/state`     | worker     | Messages from local state                |
-| `chat/delta`     | worker     | Apply, pass to other tabs, send or queue |
-| `chat/username`  | worker     | Pass username to other tabs              |
-| `chat/clear`     | worker     | Clear local state                        |
-| `cache/update`   | worker     | Reload static cache                      |
-| `chat/subscribe` | server     | Receive deltas of other browsers         |
-| `chat/sync`      | server     | Deltas since `lastDeltaId`               |
-| `chat/delta`     | server     | Called by worker: apply and broadcast    |
+| Call             | Handled by | Description                                 |
+| ---------------- | ---------- | ------------------------------------------- |
+| `chat/state`     | worker     | Messages from local state                   |
+| `chat/delta`     | worker     | Apply, pass to all tabs, queue and send     |
+| `chat/username`  | worker     | Pass username to other tabs                 |
+| `chat/clear`     | worker     | Clear local state                           |
+| `cache/update`   | worker     | Reload static cache                         |
+| `chat/subscribe` | server     | Receive `chat/log` events                   |
+| `chat/sync`      | server     | Log entries after `lastDeltaId`, log length |
+| `chat/delta`     | server     | Called by worker: apply, append to log      |
 
-Events: `chat/delta`, `chat/state`, `chat/username`.
+Events from worker to tabs: `chat/delta`, `chat/state`, `chat/username`.
+Event from server to workers: `chat/log` with `{ deltas, lastDeltaId }`,
+the sender gets its own batch back. `lastDeltaId` is a position in the
+server log, so the worker applies log entries in order and skips repeats.
 
 - HTTPS headers and CORS support
 - Reactions: like, dislike, etc. with counters

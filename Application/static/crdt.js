@@ -6,52 +6,38 @@ const emptyReactions = () => {
   return reactions;
 };
 
-const copyReactions = (source) => {
-  const reactions = emptyReactions();
-  if (!source) return reactions;
-  for (const name of REACTIONS) {
-    const count = source[name];
-    if (typeof count === 'number') reactions[name] = count;
-  }
-  return reactions;
-};
-
 const deltaId = (delta) => {
   const { id } = delta;
   if (typeof id === 'string') return id;
   return '';
 };
 
-const createMessage = (record, reactions) => ({
+const pickMessage = (record) => ({
   id: record.id,
   username: record.username,
   timestamp: record.timestamp,
   content: record.content,
-  reactions,
 });
 
-// Keeps only known fields of a delta received from the network
-const snapshotDelta = (delta) => {
+// Keeps known fields of a delta from the network, null for a malformed one
+const cleanDelta = (delta) => {
+  const record = delta?.record;
+  if (typeof record !== 'object' || record === null) return null;
   const id = deltaId(delta);
-  const { strategy, entity, record } = delta;
+  const { strategy, entity } = delta;
   if (entity === 'message') {
-    const reactions = copyReactions(record.reactions);
-    const message = createMessage(record, reactions);
-    return { id, strategy, entity, record: message };
+    return { id, strategy, entity, record: pickMessage(record) };
   }
-  const reaction = {
-    messageId: record.messageId,
-    reaction: record.reaction,
-  };
+  const reaction = { messageId: record.messageId, reaction: record.reaction };
   return { id, strategy, entity, record: reaction };
 };
 
-// State never holds the record itself: when queued message was the same
-// object as local state, a later like rewrote it and replay added it twice
+// Counters live in state only: when message delta carried a copy of them,
+// replaying the log counted likes twice
 const applyMessage = (state, record) => {
   const current = state.get(record.id);
   const reactions = current ? current.reactions : emptyReactions();
-  state.set(record.id, createMessage(record, reactions));
+  state.set(record.id, { ...pickMessage(record), reactions });
   return true;
 };
 
@@ -69,12 +55,17 @@ const APPLY = {
   reaction: { counter: applyReaction },
 };
 
+// Counters are not idempotent: replica that can see a delta twice dedupes
+const mergeDelta = (state, delta) => {
+  const apply = APPLY[delta.entity]?.[delta.strategy];
+  if (!apply) return false;
+  return apply(state, delta.record);
+};
+
 const applyDelta = (state, delta, applied) => {
   const id = deltaId(delta);
   if (id !== '' && applied.has(id)) return false;
-  const apply = APPLY[delta.entity]?.[delta.strategy];
-  if (!apply) return false;
-  const changed = apply(state, delta.record);
+  const changed = mergeDelta(state, delta);
   if (changed && id !== '') applied.add(id);
   return changed;
 };
@@ -87,4 +78,4 @@ const applyDeltas = (state, deltas, applied) => {
   return fresh;
 };
 
-export { emptyReactions, snapshotDelta, applyDelta, applyDeltas };
+export { cleanDelta, mergeDelta, applyDeltas };

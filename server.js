@@ -77,6 +77,8 @@ const handleRequest = async (req, res) => {
 };
 
 class SyncServer {
+  #saving = Promise.resolve();
+
   constructor(crdt) {
     this.clients = new Set();
     this.state = new Map();
@@ -103,20 +105,26 @@ class SyncServer {
     this.crdt.applyDeltas(this.state, this.deltas, this.applied);
   }
 
-  // State is rebuilt from deltas on load, so only deltas are stored
-  async saveData() {
-    const data = JSON.stringify({ deltas: this.deltas });
-    await fs.promises.writeFile(this.dataFile, data);
+  // State is rebuilt from deltas on load, so only deltas are stored;
+  // writes are chained so concurrent batches never overlap on disk
+  saveData() {
+    const write = () => {
+      const data = JSON.stringify({ deltas: this.deltas });
+      return fs.promises.writeFile(this.dataFile, data);
+    };
+    const saving = this.#saving.then(write);
+    this.#saving = saving.catch(() => {});
+    return saving;
   }
 
+  // Log length after the batch is the position clients sync from
   async applyDeltas(deltas) {
     const { crdt } = this;
-    const clean = deltas.map(crdt.snapshotDelta);
+    const clean = deltas.map(crdt.cleanDelta).filter(Boolean);
     const fresh = crdt.applyDeltas(this.state, clean, this.applied);
-    if (fresh.length === 0) return fresh;
-    this.deltas.push(...fresh);
-    await this.saveData();
-    return fresh;
+    const lastDeltaId = this.deltas.push(...fresh);
+    if (fresh.length > 0) await this.saveData();
+    return { deltas: fresh, lastDeltaId };
   }
 
   // One client is one browser: its service worker shares the connection
@@ -130,10 +138,9 @@ class SyncServer {
     console.log(`Client subscribed: ${client.source}`);
   }
 
-  broadcast(deltas, exclude) {
-    for (const client of this.clients) {
-      if (client !== exclude) client.emit('chat/delta', deltas);
-    }
+  // Sender gets its batch back too: the position moves its cursor
+  broadcast(entries) {
+    for (const client of this.clients) client.emit('chat/log', entries);
   }
 }
 
@@ -146,13 +153,14 @@ const createApi = (sync) => ({
 
     sync: async ({ lastDeltaId = 0 }) => {
       const deltas = sync.deltas.slice(lastDeltaId);
-      return { deltas };
+      return { deltas, lastDeltaId: sync.deltas.length };
     },
 
-    delta: async ({ deltas }, context) => {
-      const fresh = await sync.applyDeltas(deltas);
-      if (fresh.length > 0) sync.broadcast(fresh, context.client);
-      return { applied: fresh.length };
+    delta: async ({ deltas }) => {
+      const entries = await sync.applyDeltas(deltas);
+      const applied = entries.deltas.length;
+      if (applied > 0) sync.broadcast(entries);
+      return { applied };
     },
   },
 });

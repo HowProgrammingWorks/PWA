@@ -1,4 +1,4 @@
-import { applyDelta, emptyReactions } from './crdt.js';
+import { mergeDelta } from './crdt.js';
 import { generateUUID } from './metautil.js';
 import { Application } from './pwa.js';
 
@@ -31,7 +31,6 @@ class ChatApplication extends Application {
     super(config);
     this.username = '';
     this.syncTimeout = null;
-    this.seen = new Set();
     this.config = config;
   }
 
@@ -105,7 +104,10 @@ class ChatApplication extends Application {
     this.sendMessage().catch((error) => this.report(error));
   }
 
-  async sendDeltas(deltas) {
+  // Every tab, the sender included, renders deltas broadcast by the worker
+  async sendDelta(entity, strategy, record) {
+    const id = generateUUID();
+    const deltas = [{ id, strategy, entity, record }];
     const { delivered } = await this.api.chat.delta({ deltas });
     return delivered;
   }
@@ -122,9 +124,11 @@ class ChatApplication extends Application {
       this.showNotification('Please enter a username', 'warning');
       return;
     }
-    const delta = this.addMessage(content);
-    this.renderChatMessages();
-    const delivered = await this.sendDeltas([delta]);
+    const id = generateUUID();
+    const { username } = this;
+    const timestamp = Date.now();
+    const record = { id, username, timestamp, content };
+    const delivered = await this.sendDelta('message', 'lww', record);
     if (delivered) {
       this.logger.log('Sent message:', content);
       this.showNotification('Message sent!', 'success');
@@ -184,11 +188,8 @@ class ChatApplication extends Application {
       const { messageId, reaction } = btn.dataset;
       btn.addEventListener('click', () => {
         const record = { messageId, reaction };
-        const id = generateUUID();
-        const delta = { id, strategy: 'counter', entity: 'reaction', record };
-        applyDelta(this.state, delta, this.seen);
-        this.renderChatMessages();
-        this.sendDeltas([delta]).catch((error) => this.report(error));
+        const request = this.sendDelta('reaction', 'counter', record);
+        request.catch((error) => this.report(error));
         this.logger.log('Added reaction:', reaction, 'to message:', messageId);
       });
     }
@@ -251,18 +252,6 @@ class ChatApplication extends Application {
       this.clearMessagesBtn.textContent = 'Clear Database';
     }
   }
-
-  addMessage(content) {
-    const id = generateUUID();
-    const username = this.username;
-    const timestamp = Date.now();
-    const reactions = emptyReactions();
-    const record = { id, username, timestamp, content, reactions };
-    const deltaId = generateUUID();
-    const delta = { id: deltaId, strategy: 'lww', entity: 'message', record };
-    applyDelta(this.state, delta, this.seen);
-    return delta;
-  }
 }
 
 const logger = new Logger('output');
@@ -281,7 +270,6 @@ app.on('status', (data) => {
 
 app.on('state', (state) => {
   app.state.clear();
-  app.seen.clear();
   const ids = Object.keys(state);
   for (const id of ids) app.state.set(id, state[id]);
   app.renderChatMessages();
@@ -297,7 +285,7 @@ app.on('username', (data) => {
 
 app.on('delta', (deltas) => {
   for (const delta of deltas) {
-    const applied = applyDelta(app.state, delta, app.seen);
+    const applied = mergeDelta(app.state, delta);
     if (!applied) continue;
     const { entity, record } = delta;
     if (entity === 'message') {
