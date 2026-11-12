@@ -2,6 +2,10 @@
 
 > A PWA with offline-first support and CRDT-based sync over a shared WebSocket connection.
 
+Communication is built on [Metacom](https://github.com/metarhia/metacom):
+tabs call the service worker with `Metacom` client, the service worker holds
+one connection to the server with `MetacomProxy`.
+
 ## Installation
 
 Prerequisite: Node.js 18+
@@ -20,6 +24,32 @@ Prerequisite: Node.js 18+
 - Broad device/browser support, Linux, MacOS, Win, iOS, Android
 - Single WebSocket connection shared across tabs
 - Automatic reconnection, retrieving lost messages
+- RPC and events between tabs, service worker and server with Metacom
+
+## Structure
+
+| File               | Role                                                  |
+| ------------------ | ----------------------------------------------------- |
+| `server.js`        | Static files and metacom server: `chat` unit          |
+| `worker.js`        | `MetacomProxy`, local `chat` and `cache` units        |
+| `worker.sync.js`   | Local state and offline queue in OPFS                 |
+| `worker.static.js` | Static cache                                          |
+| `pwa.js`           | Application base: service worker and `Metacom` client |
+| `domain.js`        | Chat UI and domain logic                              |
+
+| Call             | Handled by | Description                              |
+| ---------------- | ---------- | ---------------------------------------- |
+| `chat/state`     | worker     | Messages from local state                |
+| `chat/delta`     | worker     | Apply, pass to other tabs, send or queue |
+| `chat/username`  | worker     | Pass username to other tabs              |
+| `chat/clear`     | worker     | Clear local state                        |
+| `cache/update`   | worker     | Reload static cache                      |
+| `chat/subscribe` | server     | Receive deltas of other browsers         |
+| `chat/sync`      | server     | Deltas since `lastDeltaId`               |
+| `chat/delta`     | server     | Called by worker: apply and broadcast    |
+
+Events: `chat/delta`, `chat/state`, `chat/username`.
+
 - HTTPS headers and CORS support
 - Reactions: like, dislike, etc. with counters
 
