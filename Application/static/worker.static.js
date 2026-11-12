@@ -1,4 +1,4 @@
-const CACHE = 'v1';
+const CACHE = 'v3';
 
 const ASSETS = [
   '/',
@@ -6,10 +6,12 @@ const ASSETS = [
   '/styles.css',
   '/pwa.js',
   '/domain.js',
+  '/crdt.js',
   '/worker.js',
   '/worker.sync.js',
   '/worker.static.js',
-  '/worker.connection.js',
+  '/metacom.js',
+  '/metautil.js',
   '/manifest.json',
   '/icon.svg',
   '/favicon.ico',

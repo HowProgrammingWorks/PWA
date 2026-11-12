@@ -1,3 +1,4 @@
+import { applyDelta, emptyReactions } from './crdt.js';
 import { Application, generateId } from './pwa.js';
 
 class Logger {
@@ -24,13 +25,12 @@ class Logger {
   }
 }
 
-const REACTIONS = { like: 0, dislike: 0, love: 0, smile: 0, poo: 0 };
-
 class ChatApplication extends Application {
   constructor(config = {}) {
     super(config);
     this.username = '';
     this.syncTimeout = null;
+    this.seen = new Set();
     this.config = config;
   }
 
@@ -55,9 +55,9 @@ class ChatApplication extends Application {
     this.updateCacheBtn.onclick = () => this.updateCache();
     this.clearBtn.onclick = () => this.logger.clear();
     this.clearMessagesBtn.onclick = () => this.clearDatabase();
-    this.sendBtn.onclick = () => this.sendMessage();
+    this.sendBtn.onclick = () => this.submit();
     this.messageInput.addEventListener('keypress', (event) => {
-      if (event.key === 'Enter') this.sendMessage();
+      if (event.key === 'Enter') this.submit();
     });
     this.usernameInput.addEventListener('blur', () => this.syncUsername());
     this.usernameInput.addEventListener('keypress', (event) => {
@@ -89,9 +89,24 @@ class ChatApplication extends Application {
     this.username = username;
     if (this.syncTimeout) clearTimeout(this.syncTimeout);
     this.syncTimeout = setTimeout(() => {
-      this.post({ type: 'username', data: this.username });
-      this.logger.log('Username auto-synced:', this.username);
+      const { username } = this;
+      this.api.chat.username({ username }).catch((error) => this.report(error));
+      this.logger.log('Username auto-synced:', username);
     }, this.config.syncTimeout);
+  }
+
+  report(error) {
+    this.logger.log('Request failed:', error.message);
+    this.showNotification('Request failed', 'error');
+  }
+
+  submit() {
+    this.sendMessage().catch((error) => this.report(error));
+  }
+
+  async sendDeltas(deltas) {
+    const { delivered } = await this.api.chat.delta({ deltas });
+    return delivered;
   }
 
   async sendMessage() {
@@ -107,15 +122,15 @@ class ChatApplication extends Application {
       return;
     }
     const delta = this.addMessage(content);
-    this.post({ type: 'delta', data: [delta] });
-    if (this.connected) {
+    this.renderChatMessages();
+    const delivered = await this.sendDeltas([delta]);
+    if (delivered) {
       this.logger.log('Sent message:', content);
       this.showNotification('Message sent!', 'success');
     } else {
       this.logger.log('Message queued (offline):', content);
       this.showNotification('Message queued - will send when online', 'info');
     }
-    this.renderChatMessages();
   }
 
   renderChatMessages() {
@@ -156,7 +171,7 @@ class ChatApplication extends Application {
       button.dataset.messageId = message.id;
       button.dataset.reaction = type;
       button.querySelector('.emoji').textContent = emoji;
-      const count = message.reactions?.[type] ?? 0;
+      const count = message.reactions?.[type] || 0;
       button.querySelector('.count').textContent = count;
       container.appendChild(button);
     }
@@ -168,26 +183,27 @@ class ChatApplication extends Application {
       const { messageId, reaction } = btn.dataset;
       btn.addEventListener('click', () => {
         const record = { messageId, reaction };
-        const delta = { strategy: 'counter', entity: 'reaction', record };
-        const message = this.state.get(messageId);
-        if (message) {
-          if (!message.reactions) message.reactions = {};
-          const count = message.reactions[reaction] ?? 0;
-          message.reactions[reaction] = count + 1;
-          this.renderChatMessages();
-        }
-        this.post({ type: 'delta', data: [delta] });
+        const id = generateId();
+        const delta = { id, strategy: 'counter', entity: 'reaction', record };
+        applyDelta(this.state, delta, this.seen);
+        this.renderChatMessages();
+        this.sendDeltas([delta]).catch((error) => this.report(error));
         this.logger.log('Added reaction:', reaction, 'to message:', messageId);
       });
     }
   }
 
-  updateCache() {
+  async updateCache() {
     this.logger.log('Requesting cache update...');
     this.updateCacheBtn.disabled = true;
     this.updateCacheBtn.textContent = 'Updating...';
     this.showNotification('Cache update requested', 'info');
-    this.post({ type: 'updateCache' });
+    try {
+      await this.api.cache.update();
+      this.emit('cacheUpdated');
+    } catch (error) {
+      this.emit('cacheUpdateFailed', { error: error.message });
+    }
   }
 
   showInstallButton(visible = true) {
@@ -211,22 +227,29 @@ class ChatApplication extends Application {
     }, this.config.notificationTimeout);
   }
 
-  clearDatabase() {
+  async clearDatabase() {
     this.logger.log('Requesting database clear...');
     this.clearMessagesBtn.disabled = true;
     this.clearMessagesBtn.textContent = 'Clearing...';
     this.showNotification('Database clear requested', 'info');
-    this.post({ type: 'clearDatabase' });
+    try {
+      await this.api.chat.clear();
+      this.emit('databaseCleared');
+    } catch (error) {
+      this.emit('databaseClearFailed', { error: error.message });
+    }
   }
 
   addMessage(content) {
     const id = generateId();
     const username = this.username;
     const timestamp = Date.now();
-    const reactions = { ...REACTIONS };
-    const message = { id, username, timestamp, content, reactions };
-    this.state.set(id, message);
-    return { strategy: 'lww', entity: 'message', record: message };
+    const reactions = emptyReactions();
+    const record = { id, username, timestamp, content, reactions };
+    const deltaId = generateId();
+    const delta = { id: deltaId, strategy: 'lww', entity: 'message', record };
+    applyDelta(this.state, delta, this.seen);
+    return delta;
   }
 }
 
@@ -251,9 +274,9 @@ app.on('status', (data) => {
 
 app.on('state', (state) => {
   app.state.clear();
-  for (const [key, value] of Object.entries(state)) {
-    app.state.set(key, value);
-  }
+  app.seen.clear();
+  const ids = Object.keys(state);
+  for (const id of ids) app.state.set(id, state[id]);
   app.renderChatMessages();
   app.logger.log('State updated from worker');
 });
@@ -262,7 +285,7 @@ app.on('username', (data) => {
   app.username = data;
   app.usernameInput.value = data;
   app.logger.log('Username updated from other tab:', data);
-  app.showNotification(`Username updated from other tab: ${data}`);
+  app.showNotification('Username updated from other tab: ' + data);
 });
 
 app.on('cacheUpdated', () => {
@@ -288,20 +311,24 @@ app.on('databaseCleared', () => {
   app.clearMessagesBtn.textContent = 'Clear Database';
 });
 
-app.on('delta', (data) => {
-  for (const delta of data) {
-    const { strategy, entity, record } = delta;
-    if (entity === 'message' && strategy === 'lww') {
-      app.state.set(record.id, record);
+app.on('databaseClearFailed', (data) => {
+  app.logger.log('Database clear failed:', data.error);
+  app.showNotification('Database clear failed', 'error');
+  app.clearMessagesBtn.disabled = false;
+  app.clearMessagesBtn.textContent = 'Clear Database';
+});
+
+app.on('delta', (deltas) => {
+  for (const delta of deltas) {
+    const applied = applyDelta(app.state, delta, app.seen);
+    if (!applied) continue;
+    const { entity, record } = delta;
+    if (entity === 'message') {
       app.logger.log('Message updated from CRDT:', record.id);
-    } else if (entity === 'reaction' && strategy === 'counter') {
-      const { messageId, reaction } = record;
-      const message = app.state.get(messageId);
-      if (!message) continue;
-      if (!message.reactions) message.reactions = {};
-      const count = message.reactions[reaction] ?? 0;
-      message.reactions[reaction] = count + 1;
-      app.logger.log(`Reaction from CRDT: ${reaction} for: ${messageId}`);
+    } else if (entity === 'reaction') {
+      const { reaction, messageId } = record;
+      const text = `Reaction from CRDT: ${reaction} for: ${messageId}`;
+      app.logger.log(text);
     }
   }
   app.renderChatMessages();

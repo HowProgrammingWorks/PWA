@@ -1,11 +1,11 @@
 'use strict';
 
 const fs = require('node:fs');
-const http = require('node:http');
 const path = require('node:path');
-const { WebSocketServer } = require('ws');
-const { randomUUID } = require('node:crypto');
 
+const { Server } = require('metacom');
+
+const HOST = '0.0.0.0';
 const PORT = 8000;
 
 const MIME_TYPES = {
@@ -36,9 +36,20 @@ const HEADERS_HTML = {
 
 const STATIC_PATH = path.join(process.cwd(), 'Application', 'static');
 
+// Browser builds of Metarhia libraries are served from node_modules
+const VENDOR = {
+  '/metacom.js': require.resolve('metacom/metacom.mjs'),
+  '/metautil.js': require.resolve('metautil/metautil.mjs'),
+};
+
 const toBool = [() => true, () => false];
 
 const prepareFile = async (url) => {
+  const vendorPath = VENDOR[url];
+  if (vendorPath) {
+    const stream = fs.createReadStream(vendorPath);
+    return { found: true, ext: 'js', stream };
+  }
   const paths = [STATIC_PATH, url];
   if (url.endsWith('/')) paths.push('index.html');
   const filePath = path.join(...paths);
@@ -66,12 +77,12 @@ const handleRequest = async (req, res) => {
 };
 
 class SyncServer {
-  constructor(server, ws) {
-    this.server = server;
-    this.ws = ws;
-    this.connections = new Map();
+  constructor(crdt) {
+    this.clients = new Set();
     this.state = new Map();
+    this.applied = new Set();
     this.deltas = [];
+    this.crdt = crdt;
     this.dataPath = path.join(process.cwd(), 'data');
     this.dataFile = path.join(this.dataPath, 'data.json');
     return this.#init();
@@ -87,129 +98,135 @@ class SyncServer {
     const data = await fs.promises.readFile(this.dataFile, 'utf8');
     const parsed = JSON.parse(data);
     this.state.clear();
-    const messages = parsed.messages ?? {};
-    for (const [key, value] of Object.entries(messages)) {
-      this.state.set(key, value);
-    }
-    this.deltas = parsed.deltas ?? [];
+    this.applied.clear();
+    this.deltas = parsed.deltas || [];
+    this.crdt.applyDeltas(this.state, this.deltas, this.applied);
   }
 
   async saveData() {
     const state = {};
-    for (const [key, value] of this.state.entries()) {
-      state[key] = value;
-    }
+    for (const id of this.state.keys()) state[id] = this.state.get(id);
     const data = JSON.stringify({ messages: state, deltas: this.deltas });
     await fs.promises.writeFile(this.dataFile, data);
   }
 
   async applyDelta(delta) {
-    this.deltas.push(delta);
-    const { strategy, entity, record } = delta;
-    if (entity === 'message' && strategy === 'lww') {
-      this.state.set(record.id, record);
-    }
-    if (entity === 'reaction' && strategy === 'counter') {
-      const { messageId, reaction } = record;
-      const message = this.state.get(messageId);
-      if (!message) return;
-      if (!message.reactions) message.reactions = {};
-      const count = message.reactions[reaction] ?? 0;
-      message.reactions[reaction] = count + 1;
-    }
+    const applied = this.crdt.applyDelta(this.state, delta, this.applied);
+    if (!applied) return false;
+    this.deltas.push(this.crdt.snapshotDelta(delta));
     await this.saveData();
+    return true;
   }
 
-  broadcast(data, excludeId = '') {
-    const packet = JSON.stringify(data);
-    for (const [clientId, socket] of this.connections) {
-      if (clientId === excludeId) continue;
-      socket.send(packet);
+  // One client is one browser: its service worker shares the connection
+  subscribe(client) {
+    if (this.clients.has(client)) return;
+    this.clients.add(client);
+    client.on('close', () => {
+      this.clients.delete(client);
+      console.log(`Client disconnected: ${client.source}`);
+    });
+    console.log(`Client subscribed: ${client.source}`);
+  }
+
+  broadcast(deltas, exclude) {
+    for (const client of this.clients) {
+      if (client !== exclude) client.emit('chat/delta', deltas);
     }
   }
 }
 
-class Session {
-  constructor(socket, req, sync) {
-    this.socket = socket;
-    this.req = req;
-    this.sync = sync;
-    this.clientId = randomUUID();
-    this.initialize();
-  }
+const createApi = (sync) => ({
+  chat: {
+    subscribe: async (args, context) => {
+      sync.subscribe(context.client);
+      return true;
+    },
 
-  post(data) {
-    this.socket.send(JSON.stringify(data));
-  }
+    sync: async ({ lastDeltaId = 0 }) => {
+      const deltas = sync.deltas.slice(lastDeltaId);
+      return { deltas };
+    },
 
-  async message(packet) {
-    const msg = packet.toString();
-    console.log(`Received from ${this.clientId}:`, msg);
-    const message = JSON.parse(msg);
-    const { type, data } = message;
-    if (type === 'ping') {
-      this.post({ type: 'pong' });
-    } else if (type === 'sync') {
-      const deltas = this.sync.deltas.slice(data.lastDeltaId);
-      if (deltas.length > 0) this.post({ type: 'delta', data: deltas });
-    } else if (type === 'delta') {
-      for (const delta of data) {
-        await this.sync.applyDelta(delta);
+    delta: async ({ deltas }, context) => {
+      const fresh = [];
+      for (const delta of deltas) {
+        const applied = await sync.applyDelta(delta);
+        if (applied) fresh.push(delta);
       }
-      this.sync.broadcast(packet, this.clientId);
+      if (fresh.length > 0) sync.broadcast(fresh, context.client);
+      return { applied: fresh.length };
+    },
+  },
+});
+
+const createProcedure = (method) => ({
+  access: 'public',
+  enter: async () => {},
+  leave: () => {},
+  invoke: (context, args) => method(args, context),
+});
+
+// Minimal application for metacom server: procedures and introspection
+const createApplication = (api) => {
+  const units = new Map();
+  for (const unit in api) {
+    const methods = api[unit];
+    const procedures = new Map();
+    for (const name in methods) {
+      procedures.set(name, createProcedure(methods[name]));
     }
+    units.set(unit, procedures);
   }
 
-  close() {
-    console.log(`WebSocket connection closed: ${this.clientId}`);
-    this.sync.connections.delete(this.clientId);
-  }
+  const introspect = createProcedure(async (names) => {
+    const result = {};
+    for (const unit of names) {
+      const procedures = units.get(unit);
+      if (!procedures) continue;
+      result[unit] = {};
+      for (const name of procedures.keys()) result[unit][name] = {};
+    }
+    return result;
+  });
 
-  error(error) {
-    console.error(`WebSocket error for ${this.clientId}:`, error);
-    this.sync.connections.delete(this.clientId);
-  }
+  const getMethod = (unit, version, name) => {
+    if (unit === 'system' && name === 'introspect') return introspect;
+    const procedures = units.get(unit);
+    return procedures?.get(name) ?? null;
+  };
 
-  initialize() {
-    this.sync.connections.set(this.clientId, this.socket);
-    const data = { clientId: this.clientId };
-    this.post({ type: 'connected', data });
-    const ip = this.req.socket.remoteAddress;
-    console.log(`Client connected: ${this.clientId} from ${ip}`);
-  }
-}
+  const auth = { saveSession: async () => {} };
+  return { console, auth, getMethod };
+};
 
 const startServer = async () => {
-  const server = http.createServer();
-  const ws = new WebSocketServer({ server });
-  const sync = await new SyncServer(server, ws);
+  const crdt = await import('./Application/static/crdt.js');
+  const sync = await new SyncServer(crdt);
+  const application = createApplication(createApi(sync));
+  const options = {
+    host: HOST,
+    port: PORT,
+    protocol: 'http',
+    timeouts: { bind: 2000 },
+    cors: { origin: '*' },
+  };
+  const server = new Server(application, options);
 
-  process.on('SIGINT', () => {
+  // Metacom handles /api over http and websocket upgrade, the rest is static
+  server.httpServer.on('request', (req, res) => {
+    if (!req.url.startsWith('/api')) handleRequest(req, res);
+  });
+
+  process.on('SIGINT', async () => {
     console.log('\nShutting down server...');
-    for (const socket of sync.connections.values()) {
-      socket.close();
-    }
-    sync.connections.clear();
-    ws.close(() => {
-      server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
-      });
-    });
+    await server.close();
+    console.log('Server closed');
+    process.exit(0);
   });
 
-  ws.on('connection', (socket, req) => {
-    const session = new Session(socket, req, sync);
-    socket.on('message', (packet) => session.message(packet));
-    socket.on('close', () => session.close());
-    socket.on('error', (error) => session.error(error));
-  });
-
-  server.on('request', handleRequest);
-
-  server.listen(PORT, () => {
-    console.log(`PWA Server running at http://127.0.0.1:${PORT}/`);
-  });
+  await server.listen();
+  console.log(`PWA Server running at http://127.0.0.1:${PORT}/`);
 };
 
 startServer();

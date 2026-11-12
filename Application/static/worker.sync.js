@@ -1,12 +1,25 @@
+import { applyDeltas, copyReactions, snapshotDelta } from './crdt.js';
+
+const ignore = () => {};
+
+const messagesFrom = (state) => {
+  const messages = {};
+  for (const id of state.keys()) messages[id] = state.get(id);
+  return messages;
+};
+
 export class SyncManager {
   constructor() {
     this.clientId = '';
     this.lastDeltaId = 0;
     this.state = new Map();
+    this.applied = new Set();
     this.queue = [];
     this.root = null;
-    this.init();
+    this.ready = this.init();
   }
+
+  #saving = Promise.resolve();
 
   async init() {
     this.root = await navigator.storage.getDirectory();
@@ -20,25 +33,47 @@ export class SyncManager {
     const data = await reader.text();
     if (!data) return;
     const parsed = JSON.parse(data);
-    this.lastDeltaId = parsed.lastDeltaId ?? 0;
-    this.queue = parsed.queue ?? [];
-    this.clientId = parsed.clientId;
-    const messages = parsed.messages ?? {};
-    for (const [id, message] of Object.entries(messages)) {
+    this.lastDeltaId = parsed.lastDeltaId || 0;
+    this.clientId = parsed.clientId || '';
+    this.queue = [];
+    const storedQueue = parsed.queue || [];
+    for (const delta of storedQueue) {
+      this.queue.push(snapshotDelta(delta));
+    }
+    const storedApplied = parsed.applied || [];
+    for (const id of storedApplied) this.applied.add(id);
+    const messages = parsed.messages || {};
+    const ids = Object.keys(messages);
+    for (const id of ids) {
+      const stored = messages[id];
+      const reactions = copyReactions(stored.reactions);
+      const message = {
+        id: stored.id,
+        username: stored.username,
+        timestamp: stored.timestamp,
+        content: stored.content,
+        reactions,
+      };
       this.state.set(id, message);
     }
   }
 
   async saveState() {
+    const saving = this.#saving.then(() => this.#write());
+    this.#saving = saving.then(ignore, ignore);
+    await saving;
+  }
+
+  async #write() {
     if (!this.root) return;
-    const messages = {};
-    for (const [key, value] of this.state.entries()) {
-      messages[key] = value;
-    }
+    const messages = messagesFrom(this.state);
+    const applied = [];
+    for (const id of this.applied) applied.push(id);
     const state = {
       clientId: this.clientId,
       lastDeltaId: this.lastDeltaId,
       queue: this.queue,
+      applied,
       messages,
     };
     const file = await this.root.getFileHandle('state.json', { create: true });
@@ -47,40 +82,22 @@ export class SyncManager {
     await writable.close();
   }
 
-  applyDelta(records) {
-    for (const record of records) {
-      this.applyCRDT(record);
-    }
+  applyDelta(deltas) {
+    const fresh = applyDeltas(this.state, deltas, this.applied);
     this.saveState();
-  }
-
-  applyCRDT(delta) {
-    const { strategy, entity, record } = delta;
-    if (entity === 'message' && strategy === 'lww') {
-      this.state.set(record.id, record);
-    } else if (entity === 'reaction' && strategy === 'counter') {
-      const { messageId, reaction } = record;
-      const message = this.state.get(messageId);
-      if (!message) return;
-      if (!message.reactions) message.reactions = {};
-      const count = message.reactions[reaction] ?? 0;
-      message.reactions[reaction] = count + 1;
-    }
+    return fresh;
   }
 
   async clearDatabase() {
     this.state.clear();
+    this.applied.clear();
     this.lastDeltaId = 0;
     this.queue = [];
     await this.saveState();
   }
 
   getMessages() {
-    const messages = {};
-    for (const [key, value] of this.state.entries()) {
-      messages[key] = value;
-    }
-    return messages;
+    return messagesFrom(this.state);
   }
 }
 

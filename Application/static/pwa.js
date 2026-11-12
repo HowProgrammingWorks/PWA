@@ -1,3 +1,6 @@
+import { Emitter } from './metautil.js';
+import { Metacom } from './metacom.js';
+
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 const getClientId = () => {
@@ -9,58 +12,18 @@ const getClientId = () => {
   return clientId;
 };
 
-class EventEmitter {
-  constructor() {
-    this.events = {};
-  }
-
-  on(eventName, listener) {
-    let listeners = this.events[eventName];
-    if (!listeners) {
-      listeners = [];
-      this.events[eventName] = listeners;
-    }
-    listeners.push(listener);
-    return this;
-  }
-
-  off(eventName, listener) {
-    const listeners = this.events[eventName];
-    if (!listeners) return this;
-    if (listener) {
-      this.events[eventName] = listeners.filter((l) => l !== listener);
-    } else {
-      delete this.events[eventName];
-    }
-    return this;
-  }
-
-  emit(eventName, ...args) {
-    const listeners = this.events[eventName] ?? [];
-    if (!listeners) return false;
-    for (const listener of listeners) {
-      try {
-        listener.apply(this, args);
-      } catch (error) {
-        console.error(`Error in event listener for ${eventName}:`, error);
-      }
-    }
-    return true;
-  }
-}
-
 const CONFIG_DEFAULTS = {
-  pingInterval: 25000,
   notificationTimeout: 3000,
   serviceWorker: './worker.js',
 };
 
-class Application extends EventEmitter {
+class Application extends Emitter {
   constructor(config = {}) {
     super();
     this.config = { ...CONFIG_DEFAULTS, ...config };
     this.state = new Map();
-    this.worker = null;
+    this.metacom = null;
+    this.api = null;
     this.prompt = null;
     this.clientId = getClientId();
     this.serviceWorker = this.config.serviceWorker;
@@ -72,7 +35,9 @@ class Application extends EventEmitter {
 
   #init() {
     this.getElements();
-    this.#setupServiceWorker();
+    this.#setupServiceWorker().catch((error) => {
+      this.logger.log('Service worker setup failed:', error.message);
+    });
     this.#setupNetworkStatus();
     this.#setupInstallPrompt();
     this.#setupNotifications();
@@ -80,39 +45,43 @@ class Application extends EventEmitter {
     this.updateInterface();
   }
 
-  #setupServiceWorker() {
-    const worker = navigator.serviceWorker;
-    worker.register(this.serviceWorker, { type: 'module' });
-    const ping = () => this.post({ type: 'ping' });
-    worker.ready.then((registration) => {
-      setInterval(ping, this.config.pingInterval);
-      this.worker = registration.active;
-      const data = { clientId: this.clientId };
-      this.post({ type: 'connect', data });
+  // Tab talks to service worker with the same api as to the server
+  async #setupServiceWorker() {
+    const { serviceWorker } = navigator;
+    await serviceWorker.register(this.serviceWorker, { type: 'module' });
+    const registration = await serviceWorker.ready;
+    const worker = registration.active;
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${protocol}//${location.host}`;
+    const metacom = Metacom.create(url, { worker });
+    metacom.on('status', ({ connected }) => {
+      this.connected = connected;
+      this.emit('status', { connected });
     });
-    worker.addEventListener('message', (event) => {
-      const { type, data } = event.data;
-      this.emit(type, data);
+    metacom.on('error', (error) => {
+      this.logger.log('Metacom error:', error.message);
     });
-    this.on('status', (data) => {
-      this.connected = data.connected;
-    });
-    document.addEventListener('visibilitychange', () => {
-      this.post({ type: 'ping' });
-    });
+    await metacom.open();
+    await metacom.load('chat', 'cache');
+    this.metacom = metacom;
+    this.api = metacom.api;
+    const { chat } = metacom.api;
+    chat.on('delta', (deltas) => this.emit('delta', deltas));
+    chat.on('state', (state) => this.emit('state', state));
+    chat.on('username', (username) => this.emit('username', username));
+    const state = await chat.state();
+    this.emit('state', state);
   }
 
   #setupNetworkStatus() {
     window.addEventListener('online', () => {
       this.online = true;
-      this.post({ type: 'online' });
       this.emit('network', { online: true });
       this.logger.log('Network: Online');
     });
 
     window.addEventListener('offline', () => {
       this.online = false;
-      this.post({ type: 'offline' });
       this.emit('network', { online: false });
       this.logger.log('Network: Offline');
     });
@@ -136,10 +105,6 @@ class Application extends EventEmitter {
     const permission = await Notification.requestPermission();
     this.logger.log('Notification permission:', permission);
     return permission === 'granted';
-  }
-
-  post(data) {
-    this.worker.postMessage(data);
   }
 
   async install() {
