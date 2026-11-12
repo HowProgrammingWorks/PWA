@@ -78,4 +78,4 @@ const applyDeltas = (state, deltas, applied) => {
   return fresh;
 };
 
-export { cleanDelta, mergeDelta, applyDeltas };
+export { REACTIONS, cleanDelta, mergeDelta, applyDeltas };

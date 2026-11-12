@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { Server } = require('metacom');
+const { toBool } = require('metautil');
 
 const HOST = '0.0.0.0';
 const PORT = 8000;
@@ -41,8 +42,6 @@ const VENDOR = {
   '/metacom.js': require.resolve('metacom/metacom.mjs'),
   '/metautil.js': require.resolve('metautil/metautil.mjs'),
 };
-
-const toBool = [() => true, () => false];
 
 const prepareFile = async (url) => {
   const vendorPath = VENDOR[url];

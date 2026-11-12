@@ -1,6 +1,14 @@
-import { mergeDelta } from './crdt.js';
+import { REACTIONS, mergeDelta } from './crdt.js';
 import { generateUUID } from './metautil.js';
 import { Application } from './pwa.js';
+
+const EMOJI = {
+  like: '👍',
+  dislike: '👎',
+  love: '❤️',
+  smile: '😊',
+  poo: '💩',
+};
 
 class Logger {
   #output;
@@ -31,7 +39,6 @@ class ChatApplication extends Application {
     super(config);
     this.username = '';
     this.syncTimeout = null;
-    this.config = config;
   }
 
   getElements() {
@@ -163,19 +170,12 @@ class ChatApplication extends Application {
   }
 
   addReactionButtons(container, message) {
-    const reactions = [
-      { type: 'like', emoji: '👍' },
-      { type: 'dislike', emoji: '👎' },
-      { type: 'love', emoji: '❤️' },
-      { type: 'smile', emoji: '😊' },
-      { type: 'poo', emoji: '💩' },
-    ];
-    for (const { type, emoji } of reactions) {
+    for (const type of REACTIONS) {
       const el = this.reactionTemplate.content.cloneNode(true);
       const button = el.querySelector('.reaction-btn');
       button.dataset.messageId = message.id;
       button.dataset.reaction = type;
-      button.querySelector('.emoji').textContent = emoji;
+      button.querySelector('.emoji').textContent = EMOJI[type];
       const count = message.reactions?.[type] || 0;
       button.querySelector('.count').textContent = count;
       container.appendChild(button);
